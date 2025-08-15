@@ -231,7 +231,7 @@ rotate_with_kick :: proc(g: ^Game) {
         // Check if this position is valid by ensuring it's within bounds and doesn't collide with the board
         t.x = test_x
         t.y = test_y
-        if !collide(g) {
+        if !collide(g, g.tetro) {
             kick_applied = true
             break
         }
@@ -319,7 +319,7 @@ rotate_ccw_with_kick :: proc(g: ^Game) {
         // Check if this position is valid by ensuring it's within bounds and doesn't collide with the board
         t.x = test_x
         t.y = test_y
-        if !collide(g) {
+        if !collide(g, g.tetro) {
             kick_applied = true
             break
         }
