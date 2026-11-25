@@ -6,6 +6,7 @@
 #include <raylib.h>
 
 #include "backdrop.h"
+#include "config.h"
 #include "music.h"
 #include "tetromino.h"
 
@@ -75,7 +76,9 @@ typedef struct Vec2i {
 
 typedef struct Launch_Options {
 	bool fullscreen;
+	bool fullscreen_set;
 	bool muted;
+	bool muted_set;
 } Launch_Options;
 
 typedef struct Title_Layout {
@@ -105,7 +108,8 @@ struct Game {
 	int             level;
 	int             total_lines;
 	int             game_score;
-	int             high_score;
+	int             high_score;                      // High score for the currently selected start_speed
+	int             high_scores[MAX_START_SPEED + 1]; // Per-starting-speed (0..9) high scores
 	int             combo;
 	bool            back_to_back;
 	int32_t         board[BOARD_HEIGHT][GAME_WIDTH];
@@ -139,6 +143,7 @@ struct Game {
 	Backdrop        backdrop;
 	Music_Engine    music;
 	bool            music_danger;
+	char            config_path[512];
 	bool            debug;
 };
 
@@ -165,6 +170,8 @@ void        spawn_next_tetro(Game *g);
 void        set_game_over(Game *g);
 void        begin_restart_countdown(Game *g);
 void        update_high_score(Game *g);
+int         get_high_score_for_speed(const Game *g, int speed);
+int         get_overall_high_score(const Game *g);
 void        set_banner(Game *g, const char *title, const char *sub);
 void        update_ghost(Game *g);
 bool        is_grounded(const Game *g);
@@ -188,6 +195,8 @@ double      level_time(int level);
 void        toggle_music_mute(Game *g);
 void        cycle_music_selection(Game *g, int delta);
 bool        is_board_in_danger(const Game *g);
+bool        game_attach_config(Game *g, const char *path);
+void        game_save_config(const Game *g);
 
 // Rendering
 void        draw_game(const Game *g);

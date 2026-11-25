@@ -35,14 +35,22 @@ int main(int argc, char **argv) {
 
 	Game game;
 	init_game(&game);
-	if (opts.muted) {
-		music_set_muted(&game.music, true);
+
+	char cfg_path[512];
+	if (config_default_path(cfg_path, sizeof(cfg_path))) {
+		game_attach_config(&game, cfg_path);
+	}
+
+	if (opts.muted_set) {
+		music_set_muted(&game.music, opts.muted);
 	}
 	music_open_audio(&game.music);
 
-	if (opts.fullscreen) {
+	bool start_fullscreen = opts.fullscreen_set ? opts.fullscreen : game.fullscreen;
+	if (start_fullscreen) {
 		toggle_fullscreen(&game);
 	} else {
+		game.fullscreen = false;
 		center_windowed_frame();
 	}
 
@@ -57,6 +65,7 @@ int main(int argc, char **argv) {
 		draw_game(&game);
 	}
 
+	game_save_config(&game);
 	music_close_audio(&game.music);
 	CloseAudioDevice();
 	CloseWindow();

@@ -34,7 +34,9 @@ static double clamp_f64(double v, double lo, double hi) {
 
 void parse_cli_args(int argc, const char *const *argv, Launch_Options *opts, bool *show_help, const char **err) {
 	opts->fullscreen = true;
+	opts->fullscreen_set = false;
 	opts->muted = false;
+	opts->muted_set = false;
 	*show_help = false;
 	*err = NULL;
 
@@ -42,13 +44,19 @@ void parse_cli_args(int argc, const char *const *argv, Launch_Options *opts, boo
 		const char *arg = argv[i];
 		if (strcmp(arg, "-w") == 0 || strcmp(arg, "--windowed") == 0 || strcmp(arg, "--no-fullscreen") == 0) {
 			opts->fullscreen = false;
+			opts->fullscreen_set = true;
 		} else if (strcmp(arg, "-f") == 0 || strcmp(arg, "--fullscreen") == 0) {
 			opts->fullscreen = true;
+			opts->fullscreen_set = true;
 		} else if (strcmp(arg, "-m") == 0 || strcmp(arg, "--mute") == 0 || strcmp(arg, "--no-music") == 0) {
 			opts->muted = true;
+			opts->muted_set = true;
 		} else if (strcmp(arg, "-h") == 0 || strcmp(arg, "--help") == 0) {
 			*show_help = true;
 			return;
+		} else if (strncmp(arg, "-psn_", 5) == 0) {
+			// Ignore macOS LaunchServices process serial number argument on Finder launch
+			continue;
 		} else {
 			*err = arg;
 			return;
@@ -99,6 +107,7 @@ void toggle_fullscreen(Game *g) {
 	if (!g->fullscreen) {
 		center_windowed_frame();
 	}
+	game_save_config(g);
 }
 
 void compute_viewport(float screen_w, float screen_h, float *out_scale, float *out_offset_x, float *out_offset_y) {
@@ -219,6 +228,7 @@ void init_game(Game *g) {
 	g->start_speed = 0;
 	g->start_height = 0;
 	g->start_music = MUSIC_SEL_1;
+	g->fullscreen = true;
 	g->level = 0;
 	g->total_lines = 0;
 	g->game_score = 0;
@@ -229,6 +239,56 @@ void init_game(Game *g) {
 	init_backdrop(&g->backdrop, false);
 	music_init(&g->music);
 	music_play_song(&g->music, SONG_TITLE);
+}
+
+static void sync_active_high_score(Game *g) {
+	int s = clamp_int(g->start_speed, 0, MAX_START_SPEED);
+	g->high_score = g->high_scores[s];
+}
+
+bool game_attach_config(Game *g, const char *path) {
+	if (!g || !path || path[0] == '\0') {
+		return false;
+	}
+	snprintf(g->config_path, sizeof(g->config_path), "%s", path);
+
+	Texas_Config cfg;
+	bool loaded = config_load(path, &cfg);
+	g->start_speed = clamp_int(cfg.start_speed, 0, MAX_START_SPEED);
+	g->start_height = clamp_int(cfg.start_height, 0, MAX_START_HEIGHT);
+	g->start_music = cfg.start_music;
+	g->fullscreen = cfg.fullscreen;
+	for (int i = 0; i <= MAX_START_SPEED; i++) {
+		if (cfg.high_scores[i] > g->high_scores[i]) {
+			g->high_scores[i] = cfg.high_scores[i];
+		}
+	}
+	sync_active_high_score(g);
+	music_set_muted(&g->music, cfg.muted);
+	if (g->state == STATE_TITLE) {
+		if (g->start_music == MUSIC_SEL_OFF) {
+			music_stop(&g->music);
+		} else {
+			music_play_song(&g->music, SONG_TITLE);
+		}
+	}
+	return loaded;
+}
+
+void game_save_config(const Game *g) {
+	if (!g || g->config_path[0] == '\0') {
+		return;
+	}
+	Texas_Config cfg;
+	cfg.start_speed = g->start_speed;
+	cfg.start_height = g->start_height;
+	cfg.start_music = g->start_music;
+	cfg.muted = g->music.muted;
+	cfg.fullscreen = g->fullscreen;
+	for (int i = 0; i < CONFIG_SPEED_COUNT; i++) {
+		cfg.high_scores[i] = (i <= MAX_START_SPEED) ? g->high_scores[i] : 0;
+	}
+	config_save(g->config_path, &cfg);
 }
 
 void return_to_title(Game *g) {
@@ -259,7 +319,9 @@ void title_adjust_value(Game *g, int delta) {
 		int next = clamp_int(g->start_speed + delta, 0, MAX_START_SPEED);
 		if (next != g->start_speed) {
 			g->start_speed = next;
+			sync_active_high_score(g);
 			music_play_sfx(&g->music, SFX_MENU_MOVE);
+			game_save_config(g);
 		}
 		break;
 	}
@@ -268,6 +330,7 @@ void title_adjust_value(Game *g, int delta) {
 		if (next != g->start_height) {
 			g->start_height = next;
 			music_play_sfx(&g->music, SFX_MENU_MOVE);
+			game_save_config(g);
 		}
 		break;
 	}
@@ -277,6 +340,7 @@ void title_adjust_value(Game *g, int delta) {
 			g->start_music = next;
 			preview_selected_music(g);
 			music_play_sfx(&g->music, SFX_MENU_MOVE);
+			game_save_config(g);
 		}
 		break;
 	}
@@ -288,13 +352,16 @@ void title_set_value(Game *g, int value) {
 	case TITLE_FOCUS_SPEED:
 		if (value >= 0 && value <= MAX_START_SPEED && value != g->start_speed) {
 			g->start_speed = value;
+			sync_active_high_score(g);
 			music_play_sfx(&g->music, SFX_MENU_MOVE);
+			game_save_config(g);
 		}
 		break;
 	case TITLE_FOCUS_HEIGHT:
 		if (value >= 0 && value <= MAX_START_HEIGHT && value != g->start_height) {
 			g->start_height = value;
 			music_play_sfx(&g->music, SFX_MENU_MOVE);
+			game_save_config(g);
 		}
 		break;
 	case TITLE_FOCUS_MUSIC: {
@@ -309,6 +376,7 @@ void title_set_value(Game *g, int value) {
 			g->start_music = sel;
 			preview_selected_music(g);
 			music_play_sfx(&g->music, SFX_MENU_MOVE);
+			game_save_config(g);
 		}
 		break;
 	}
@@ -358,6 +426,7 @@ void start_new_game(Game *g) {
 	g->state = STATE_PLAYING;
 	g->start_speed = clamp_int(g->start_speed, 0, MAX_START_SPEED);
 	g->start_height = clamp_int(g->start_height, 0, MAX_START_HEIGHT);
+	sync_active_high_score(g);
 	g->level = g->start_speed;
 	g->total_lines = 0;
 	g->game_score = 0;
@@ -460,9 +529,29 @@ void begin_restart_countdown(Game *g) {
 }
 
 void update_high_score(Game *g) {
-	if (g->game_score > g->high_score) {
-		g->high_score = g->game_score;
+	int s = clamp_int(g->start_speed, 0, MAX_START_SPEED);
+	if (g->game_score > g->high_scores[s]) {
+		g->high_scores[s] = g->game_score;
+		g->high_score = g->high_scores[s];
+		game_save_config(g);
+	} else {
+		g->high_score = g->high_scores[s];
 	}
+}
+
+int get_high_score_for_speed(const Game *g, int speed) {
+	int s = clamp_int(speed, 0, MAX_START_SPEED);
+	return g->high_scores[s];
+}
+
+int get_overall_high_score(const Game *g) {
+	int best = 0;
+	for (int i = 0; i <= MAX_START_SPEED; i++) {
+		if (g->high_scores[i] > best) {
+			best = g->high_scores[i];
+		}
+	}
+	return best;
 }
 
 void set_banner(Game *g, const char *title, const char *sub) {
@@ -888,7 +977,9 @@ bool update_title_pointer(Game *g, Vector2 ui_pos, bool clicked) {
 			if (clicked) {
 				g->start_speed = i;
 				g->title_focus = TITLE_FOCUS_SPEED;
+				sync_active_high_score(g);
 				music_play_sfx(&g->music, SFX_MENU_MOVE);
+				game_save_config(g);
 			}
 			return true;
 		}
@@ -901,6 +992,7 @@ bool update_title_pointer(Game *g, Vector2 ui_pos, bool clicked) {
 				g->start_height = i;
 				g->title_focus = TITLE_FOCUS_HEIGHT;
 				music_play_sfx(&g->music, SFX_MENU_MOVE);
+				game_save_config(g);
 			}
 			return true;
 		}
@@ -914,6 +1006,7 @@ bool update_title_pointer(Game *g, Vector2 ui_pos, bool clicked) {
 				g->title_focus = TITLE_FOCUS_MUSIC;
 				preview_selected_music(g);
 				music_play_sfx(&g->music, SFX_MENU_MOVE);
+				game_save_config(g);
 			}
 			return true;
 		}
@@ -1305,6 +1398,7 @@ double level_time(int level) {
 
 void toggle_music_mute(Game *g) {
 	music_set_muted(&g->music, !g->music.muted);
+	game_save_config(g);
 	if (g->state == STATE_PLAYING) {
 		set_banner(g, g->music.muted ? "MUSIC MUTED" : "MUSIC ON", music_selection_name(g->start_music));
 	}
@@ -1324,6 +1418,7 @@ void cycle_music_selection(Game *g, int delta) {
 		music_set_danger(&g->music, g->music_danger);
 		music_play_song(&g->music, song);
 	}
+	game_save_config(g);
 	if (g->state == STATE_PLAYING) {
 		char sub[64];
 		if (g->start_music == MUSIC_SEL_OFF) {
@@ -1561,12 +1656,21 @@ static void draw_title_screen(const Game *g) {
 		WHITE
 	);
 
-	// Session High Score (when non-zero)
-	if (g->high_score > 0) {
-		char hs[64];
-		snprintf(hs, sizeof(hs), "HIGH SCORE: %d", g->high_score);
-		int hs_w = MeasureText(hs, 18);
-		DrawText(hs, center_x - hs_w / 2, 574, 18, (Color){245, 210, 80, 255});
+	// High Score for the selected starting speed (plus overall best when different)
+	int speed_best = get_high_score_for_speed(g, g->start_speed);
+	int overall_best = get_overall_high_score(g);
+	if (speed_best > 0 || overall_best > 0) {
+		char hs[96];
+		if (speed_best > 0 && overall_best > speed_best) {
+			snprintf(hs, sizeof(hs), "SPEED %d BEST: %d   |   OVERALL: %d", g->start_speed, speed_best, overall_best);
+		} else if (speed_best > 0) {
+			snprintf(hs, sizeof(hs), "SPEED %d HIGH SCORE: %d", g->start_speed, speed_best);
+		} else {
+			snprintf(hs, sizeof(hs), "SPEED %d BEST: --   |   OVERALL: %d", g->start_speed, overall_best);
+		}
+		int hs_w = MeasureText(hs, 17);
+		Color hs_col = (speed_best > 0) ? (Color){245, 210, 80, 255} : TEXT_MUTED;
+		DrawText(hs, center_x - hs_w / 2, 574, 17, hs_col);
 	}
 
 	// Footer hints
@@ -1732,7 +1836,7 @@ static void draw_side_panel(const Game *g) {
 	snprintf(buf, sizeof(buf), "Score: %d", g->game_score);
 	DrawText(buf, tx, ty, 22, WHITE);
 	ty += 30;
-	snprintf(buf, sizeof(buf), "Best:  %d", g->high_score);
+	snprintf(buf, sizeof(buf), "Best (S%d): %d", g->start_speed, get_high_score_for_speed(g, g->start_speed));
 	DrawText(buf, tx, ty, 18, (Color){245, 210, 80, 255});
 	ty += 26;
 	snprintf(buf, sizeof(buf), "Lines: %d", g->total_lines);

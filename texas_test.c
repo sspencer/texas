@@ -488,6 +488,14 @@ static void test_cli_args_and_viewport_scaling(void) {
 		EXPECT(err == NULL);
 	}
 
+	// macOS Finder/LaunchServices -psn_* argument is ignored cleanly
+	const char *psn_arg = "-psn_0_123456";
+	parse_cli_args(1, &psn_arg, &opts, &help, &err);
+	EXPECT(opts.fullscreen);
+	EXPECT(!opts.muted);
+	EXPECT(!help);
+	EXPECT(err == NULL);
+
 	// Viewport scaling: exact native window -> scale 1, offset 0
 	float s1 = 0, ox1 = 0, oy1 = 0;
 	compute_viewport((float)BASE_WIDTH, (float)BASE_HEIGHT, &s1, &ox1, &oy1);
@@ -981,6 +989,150 @@ static void test_sfx_gameplay_triggers(void) {
 	EXPECT_EQ_INT(g.music.last_sfx, SFX_LEVEL_UP);
 }
 
+static void test_config_save_load_and_game_persistence(void) {
+	const char *path = "/tmp/texas_cfg_test/nested/config.ini";
+	remove(path);
+
+	// Missing file returns false and populates clean defaults
+	Texas_Config cfg;
+	EXPECT(!config_load(path, &cfg));
+	EXPECT_EQ_INT(cfg.start_speed, 0);
+	EXPECT_EQ_INT(cfg.start_height, 0);
+	EXPECT_EQ_INT(cfg.start_music, MUSIC_SEL_1);
+	EXPECT(!cfg.muted);
+	EXPECT(cfg.fullscreen);
+	for (int i = 0; i < CONFIG_SPEED_COUNT; i++) {
+		EXPECT_EQ_INT(cfg.high_scores[i], 0);
+	}
+
+	// Save & round-trip all settings including distinct per-speed high scores
+	cfg.start_speed = 6;
+	cfg.start_height = 4;
+	cfg.start_music = MUSIC_SEL_3;
+	cfg.muted = true;
+	cfg.fullscreen = false;
+	cfg.high_scores[0] = 4500;
+	cfg.high_scores[6] = 12345;
+	cfg.high_scores[9] = 29000;
+	EXPECT(config_save(path, &cfg));
+
+	Texas_Config loaded;
+	EXPECT(config_load(path, &loaded));
+	EXPECT_EQ_INT(loaded.start_speed, 6);
+	EXPECT_EQ_INT(loaded.start_height, 4);
+	EXPECT_EQ_INT(loaded.start_music, MUSIC_SEL_3);
+	EXPECT(loaded.muted);
+	EXPECT(!loaded.fullscreen);
+	EXPECT_EQ_INT(loaded.high_scores[0], 4500);
+	EXPECT_EQ_INT(loaded.high_scores[3], 0);
+	EXPECT_EQ_INT(loaded.high_scores[6], 12345);
+	EXPECT_EQ_INT(loaded.high_scores[9], 29000);
+
+	// Out-of-range keys are clamped, unknown keys ignored, legacy high_score migrates to start_speed
+	FILE *f = fopen(path, "w");
+	EXPECT(f != NULL);
+	if (f) {
+		fprintf(f, "# comment\nunknown = 999\nspeed = 42\nheight = -3\nmusic = off\nmuted = no\nfullscreen = false\nhigh_score = 7777\nhigh_score_0 = -10\n");
+		fclose(f);
+	}
+	EXPECT(config_load(path, &loaded));
+	EXPECT_EQ_INT(loaded.start_speed, MAX_START_SPEED);
+	EXPECT_EQ_INT(loaded.start_height, 0);
+	EXPECT_EQ_INT(loaded.start_music, MUSIC_SEL_OFF);
+	EXPECT(!loaded.muted);
+	EXPECT(!loaded.fullscreen);
+	EXPECT_EQ_INT(loaded.high_scores[0], 0);
+	EXPECT_EQ_INT(loaded.high_scores[MAX_START_SPEED], 7777);
+
+	// Game tracks separate high scores per starting speed and restores all of them on restart
+	Game g1;
+	init_game(&g1);
+	EXPECT(game_attach_config(&g1, path));
+	EXPECT_EQ_INT(g1.start_speed, MAX_START_SPEED);
+	EXPECT_EQ_INT(g1.high_score, 7777);
+	EXPECT_EQ_INT(g1.start_music, MUSIC_SEL_OFF);
+	EXPECT_EQ_INT(g1.music.song, SONG_NONE); // Respects saved Music OFF on title
+
+	// Score on speed 5, then score separately on speed 2
+	g1.title_focus = TITLE_FOCUS_SPEED;
+	title_set_value(&g1, 5);
+	EXPECT_EQ_INT(g1.high_score, 0); // Speed 5 has no best yet
+	g1.game_score = 8800;
+	update_high_score(&g1);
+	EXPECT_EQ_INT(get_high_score_for_speed(&g1, 5), 8800);
+	EXPECT_EQ_INT(get_high_score_for_speed(&g1, 9), 7777);
+	EXPECT_EQ_INT(get_overall_high_score(&g1), 8800);
+
+	title_set_value(&g1, 2);
+	EXPECT_EQ_INT(g1.high_score, 0); // Switching speed updates active high_score
+	g1.game_score = 3100;
+	update_high_score(&g1);
+	EXPECT_EQ_INT(get_high_score_for_speed(&g1, 2), 3100);
+
+	// Switch back to speed 5, change height/music/mute
+	title_set_value(&g1, 5);
+	EXPECT_EQ_INT(g1.high_score, 8800);
+	g1.title_focus = TITLE_FOCUS_HEIGHT;
+	title_set_value(&g1, 2);
+	g1.title_focus = TITLE_FOCUS_MUSIC;
+	title_set_value(&g1, 2); // Tetra March
+	toggle_music_mute(&g1);
+
+	// Simulate app restart with a brand-new Game instance
+	Game g2;
+	init_game(&g2);
+	EXPECT(game_attach_config(&g2, path));
+	EXPECT_EQ_INT(g2.start_speed, 5);
+	EXPECT_EQ_INT(g2.start_height, 2);
+	EXPECT_EQ_INT(g2.start_music, MUSIC_SEL_2);
+	EXPECT(g2.music.muted);
+	EXPECT(!g2.fullscreen);
+	EXPECT_EQ_INT(g2.high_score, 8800);
+	EXPECT_EQ_INT(get_high_score_for_speed(&g2, 2), 3100);
+	EXPECT_EQ_INT(get_high_score_for_speed(&g2, 5), 8800);
+	EXPECT_EQ_INT(get_high_score_for_speed(&g2, 9), 7777);
+	EXPECT_EQ_INT(get_overall_high_score(&g2), 8800);
+	EXPECT_EQ_INT(g2.music.song, SONG_TITLE);
+
+	remove(path);
+}
+
+static void test_sfx_balance_above_background_music(void) {
+	int16_t buf[MUSIC_BUFFER_FRAMES * MUSIC_CHANNELS];
+	Music_Engine m;
+
+	// Measure RMS of background music (Tetra March)
+	music_init(&m);
+	music_play_song(&m, SONG_TETRA_MARCH);
+	double bgm_sq = 0.0;
+	int bgm_samples = 0;
+	for (int c = 0; c < 60; c++) {
+		music_render(&m, buf, MUSIC_BUFFER_FRAMES);
+		for (int i = 0; i < MUSIC_BUFFER_FRAMES * MUSIC_CHANNELS; i++) {
+			bgm_sq += (double)buf[i] * (double)buf[i];
+			bgm_samples++;
+		}
+	}
+	double bgm_rms = sqrt(bgm_sq / (double)bgm_samples);
+
+	// Measure RMS of SFX_TETRIS over its active body (~0.5s)
+	music_init(&m);
+	music_play_sfx(&m, SFX_TETRIS);
+	double sfx_sq = 0.0;
+	int sfx_samples = 0;
+	for (int c = 0; c < 22; c++) {
+		music_render(&m, buf, MUSIC_BUFFER_FRAMES);
+		for (int i = 0; i < MUSIC_BUFFER_FRAMES * MUSIC_CHANNELS; i++) {
+			sfx_sq += (double)buf[i] * (double)buf[i];
+			sfx_samples++;
+		}
+	}
+	double sfx_rms = sqrt(sfx_sq / (double)sfx_samples);
+
+	EXPECT(bgm_rms > 1500.0);          // Music remains clearly audible
+	EXPECT(sfx_rms > bgm_rms * 1.15);  // SFX clearly cut through above background music
+}
+
 #define RUN_TEST(fn)                                                    \
 	do {                                                                \
 		current_test_failed = 0;                                        \
@@ -1019,6 +1171,8 @@ int main(void) {
 	RUN_TEST(test_music_game_lifecycle_and_title_selection);
 	RUN_TEST(test_sfx_synthesis_distinct_line_clear_and_tetris);
 	RUN_TEST(test_sfx_gameplay_triggers);
+	RUN_TEST(test_config_save_load_and_game_persistence);
+	RUN_TEST(test_sfx_balance_above_background_music);
 
 	printf("\nFinished %d tests (%d failed).\n", tests_run, tests_failed);
 	return (tests_failed == 0) ? 0 : 1;
