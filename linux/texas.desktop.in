@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Texas
+GenericName=Falling Block Puzzle
+Comment=A clean-room falling-block puzzle game
+Exec=@BINDIR@/texas
+Icon=texas
+Terminal=false
+Categories=Game;BlocksGame;
+Keywords=tetris;puzzle;blocks;
+StartupWMClass=Texas

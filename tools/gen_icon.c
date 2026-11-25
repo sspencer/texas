@@ -1,8 +1,12 @@
 /*
- * Procedural macOS App Icon generator for Texas.
- * Renders a 1024x1024 4x-supersampled RGBA icon matching Texas's dark slate
- * playfield aesthetic and Guideline tetromino palette, written as an
- * uncompressed 32-bit top-down TGA (converted to PNG/.icns via sips/iconutil).
+ * Procedural app icon generator for Texas.
+ * Renders a 4x-supersampled RGBA icon matching Texas's dark slate playfield
+ * aesthetic and Guideline tetromino palette. The artwork is designed on a
+ * 1024x1024 canvas and can be rendered at any square size.
+ *
+ * Output format is chosen by file extension:
+ *   .tga  uncompressed 32-bit top-down TGA (macOS: converted to .icns via sips)
+ *   .png  dependency-free PNG (stored deflate; used for Linux hicolor icons)
  */
 
 #include <math.h>
@@ -250,13 +254,132 @@ static RGBA eval_pixel(float x, float y) {
 	return rgba_over(col, bg);
 }
 
+// ---- Minimal PNG writer (zlib "stored" blocks, no compression library needed) ----
+
+static uint32_t crc_table[256];
+
+static void crc_init(void) {
+	for (uint32_t n = 0; n < 256; n++) {
+		uint32_t c = n;
+		for (int k = 0; k < 8; k++) {
+			c = (c & 1u) ? (0xEDB88320u ^ (c >> 1)) : (c >> 1);
+		}
+		crc_table[n] = c;
+	}
+}
+
+static uint32_t crc_update(uint32_t crc, const uint8_t *buf, size_t len) {
+	for (size_t i = 0; i < len; i++) {
+		crc = crc_table[(crc ^ buf[i]) & 0xFFu] ^ (crc >> 8);
+	}
+	return crc;
+}
+
+static void put_be32(uint8_t *p, uint32_t v) {
+	p[0] = (uint8_t)(v >> 24);
+	p[1] = (uint8_t)(v >> 16);
+	p[2] = (uint8_t)(v >> 8);
+	p[3] = (uint8_t)v;
+}
+
+static void png_chunk(FILE *f, const char *type, const uint8_t *data, uint32_t len) {
+	uint8_t hdr[8];
+	put_be32(hdr, len);
+	memcpy(hdr + 4, type, 4);
+	fwrite(hdr, 1, 8, f);
+	if (len) fwrite(data, 1, len, f);
+	uint32_t crc = crc_update(0xFFFFFFFFu, (const uint8_t *)type, 4);
+	crc = crc_update(crc, data, len) ^ 0xFFFFFFFFu;
+	uint8_t tail[4];
+	put_be32(tail, crc);
+	fwrite(tail, 1, 4, f);
+}
+
+// rgba: top-down, tightly packed RGBA8.
+static int write_png(FILE *f, const uint8_t *rgba, int size) {
+	static const uint8_t sig[8] = {0x89, 'P', 'N', 'G', '\r', '\n', 0x1A, '\n'};
+	fwrite(sig, 1, 8, f);
+
+	uint8_t ihdr[13];
+	put_be32(ihdr, (uint32_t)size);
+	put_be32(ihdr + 4, (uint32_t)size);
+	ihdr[8] = 8;  // bit depth
+	ihdr[9] = 6;  // color type: RGBA
+	ihdr[10] = 0; // compression
+	ihdr[11] = 0; // filter
+	ihdr[12] = 0; // interlace
+	png_chunk(f, "IHDR", ihdr, sizeof(ihdr));
+
+	// Raw scanlines, each prefixed with filter byte 0.
+	size_t row = (size_t)size * 4 + 1;
+	size_t raw_len = row * (size_t)size;
+	size_t blocks = (raw_len + 65534) / 65535;
+	size_t z_len = 2 + raw_len + blocks * 5 + 4;
+	uint8_t *z = (uint8_t *)malloc(z_len);
+	uint8_t *raw = (uint8_t *)malloc(raw_len);
+	if (!z || !raw) {
+		free(z);
+		free(raw);
+		return 0;
+	}
+	for (int y = 0; y < size; y++) {
+		raw[(size_t)y * row] = 0;
+		memcpy(raw + (size_t)y * row + 1, rgba + (size_t)y * (size_t)size * 4, (size_t)size * 4);
+	}
+
+	size_t o = 0;
+	z[o++] = 0x78; // zlib header: deflate, 32K window
+	z[o++] = 0x01;
+	uint32_t a = 1, b = 0;
+	for (size_t pos = 0; pos < raw_len;) {
+		size_t n = raw_len - pos;
+		if (n > 65535) n = 65535;
+		z[o++] = (pos + n == raw_len) ? 1 : 0; // BFINAL, BTYPE=00 (stored)
+		z[o++] = (uint8_t)(n & 0xFF);
+		z[o++] = (uint8_t)(n >> 8);
+		z[o++] = (uint8_t)(~n & 0xFF);
+		z[o++] = (uint8_t)((~n >> 8) & 0xFF);
+		memcpy(z + o, raw + pos, n);
+		for (size_t i = 0; i < n; i++) {
+			a = (a + raw[pos + i]) % 65521u;
+			b = (b + a) % 65521u;
+		}
+		o += n;
+		pos += n;
+	}
+	put_be32(z + o, (b << 16) | a);
+	o += 4;
+
+	png_chunk(f, "IDAT", z, (uint32_t)o);
+	png_chunk(f, "IEND", NULL, 0);
+	free(z);
+	free(raw);
+	return 1;
+}
+
+static int has_suffix(const char *s, const char *suffix) {
+	size_t ls = strlen(s), lx = strlen(suffix);
+	return ls >= lx && strcmp(s + ls - lx, suffix) == 0;
+}
+
 int main(int argc, char **argv) {
 	if (argc < 2) {
-		fprintf(stderr, "Usage: %s <output.tga>\n", argv[0]);
+		fprintf(stderr, "Usage: %s <output.tga|output.png> [size]\n", argv[0]);
 		return 1;
 	}
 
-	size_t px_bytes = (size_t)ICON_SIZE * ICON_SIZE * 4;
+	int size = ICON_SIZE;
+	if (argc >= 3) {
+		size = atoi(argv[2]);
+		if (size < 8 || size > 4096) {
+			fprintf(stderr, "Invalid size: %s (expected 8..4096)\n", argv[2]);
+			return 1;
+		}
+	}
+	const int is_png = has_suffix(argv[1], ".png");
+	const float scale = (float)ICON_SIZE / (float)size; // design canvas units per output pixel
+
+	size_t px_bytes = (size_t)size * (size_t)size * 4;
 	uint8_t *pixels = (uint8_t *)malloc(px_bytes);
 	if (!pixels) {
 		fprintf(stderr, "Out of memory\n");
@@ -266,13 +389,13 @@ int main(int argc, char **argv) {
 	const float inv_ss = 1.0f / (float)SS;
 	const float inv_samples = 1.0f / (float)(SS * SS);
 
-	for (int py = 0; py < ICON_SIZE; py++) {
-		for (int px = 0; px < ICON_SIZE; px++) {
+	for (int py = 0; py < size; py++) {
+		for (int px = 0; px < size; px++) {
 			float r_acc = 0.0f, g_acc = 0.0f, b_acc = 0.0f, a_acc = 0.0f;
 			for (int sy = 0; sy < SS; sy++) {
 				for (int sx = 0; sx < SS; sx++) {
-					float fx = (float)px + ((float)sx + 0.5f) * inv_ss;
-					float fy = (float)py + ((float)sy + 0.5f) * inv_ss;
+					float fx = ((float)px + ((float)sx + 0.5f) * inv_ss) * scale;
+					float fy = ((float)py + ((float)sy + 0.5f) * inv_ss) * scale;
 					RGBA s = eval_pixel(fx, fy);
 					r_acc += s.r * s.a;
 					g_acc += s.g * s.a;
@@ -285,11 +408,11 @@ int main(int argc, char **argv) {
 			float g = (a_acc > 1e-6f) ? clampf(g_acc / a_acc, 0.0f, 1.0f) : 0.0f;
 			float b = (a_acc > 1e-6f) ? clampf(b_acc / a_acc, 0.0f, 1.0f) : 0.0f;
 
-			// 32-bit TGA stores BGRA
-			size_t idx = ((size_t)py * ICON_SIZE + (size_t)px) * 4;
-			pixels[idx + 0] = (uint8_t)lrintf(b * 255.0f);
+			// 32-bit TGA stores BGRA; PNG stores RGBA
+			size_t idx = ((size_t)py * (size_t)size + (size_t)px) * 4;
+			pixels[idx + 0] = (uint8_t)lrintf((is_png ? r : b) * 255.0f);
 			pixels[idx + 1] = (uint8_t)lrintf(g * 255.0f);
-			pixels[idx + 2] = (uint8_t)lrintf(r * 255.0f);
+			pixels[idx + 2] = (uint8_t)lrintf((is_png ? b : r) * 255.0f);
 			pixels[idx + 3] = (uint8_t)lrintf(a * 255.0f);
 		}
 	}
@@ -301,19 +424,29 @@ int main(int argc, char **argv) {
 		return 1;
 	}
 
-	// Uncompressed 32-bit BGRA top-down TGA header (18 bytes)
-	uint8_t header[18] = {0};
-	header[2]  = 2;                                // Uncompressed true-color
-	header[12] = (uint8_t)(ICON_SIZE & 0xFF);      // Width LSB
-	header[13] = (uint8_t)((ICON_SIZE >> 8) & 0xFF);
-	header[14] = (uint8_t)(ICON_SIZE & 0xFF);      // Height LSB
-	header[15] = (uint8_t)((ICON_SIZE >> 8) & 0xFF);
-	header[16] = 32;                               // 32 bits per pixel
-	header[17] = 0x28;                             // Top-left origin + 8 alpha bits
+	int ok = 1;
+	if (is_png) {
+		crc_init();
+		ok = write_png(f, pixels, size);
+	} else {
+		// Uncompressed 32-bit BGRA top-down TGA header (18 bytes)
+		uint8_t header[18] = {0};
+		header[2]  = 2;                           // Uncompressed true-color
+		header[12] = (uint8_t)(size & 0xFF);      // Width LSB
+		header[13] = (uint8_t)((size >> 8) & 0xFF);
+		header[14] = (uint8_t)(size & 0xFF);      // Height LSB
+		header[15] = (uint8_t)((size >> 8) & 0xFF);
+		header[16] = 32;                          // 32 bits per pixel
+		header[17] = 0x28;                        // Top-left origin + 8 alpha bits
 
-	fwrite(header, 1, sizeof(header), f);
-	fwrite(pixels, 1, px_bytes, f);
-	fclose(f);
+		fwrite(header, 1, sizeof(header), f);
+		fwrite(pixels, 1, px_bytes, f);
+	}
+	if (fclose(f) != 0) ok = 0;
 	free(pixels);
+	if (!ok) {
+		fprintf(stderr, "Failed to write %s\n", argv[1]);
+		return 1;
+	}
 	return 0;
 }

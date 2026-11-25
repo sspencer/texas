@@ -18,13 +18,25 @@ make run-windowed
 ./bin/texas -w          # also accepts --windowed or --no-fullscreen
 ```
 
-To build the standalone macOS `.app` bundle (with app icon) or install it into `/Applications`:
+`make install` builds a native app for the platform you're on.
+
+On **macOS** it builds the standalone `.app` bundle (with app icon) and installs it into `/Applications`:
 
 ```sh
 make app                # builds bin/Texas.app (double-click to launch)
 make install            # builds and installs /Applications/Texas.app
 make uninstall          # removes /Applications/Texas.app
 ```
+
+On **Linux** (and other FreeDesktop systems) it installs the `texas` binary, a `.desktop` launcher entry, and hicolor app icons under `PREFIX` (default `~/.local`, so no sudo is needed):
+
+```sh
+make install                           # ~/.local/bin/texas + app launcher entry + icons
+sudo make install PREFIX=/usr/local    # system-wide install for all users
+make uninstall                         # remove (use the same PREFIX you installed with)
+```
+
+`DESTDIR` is honored for packaging (e.g. `make install DESTDIR=pkg PREFIX=/usr`).
 
 To build, check, or run the unit tests:
 
