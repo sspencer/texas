@@ -1,35 +1,70 @@
 # Texas
 
-A clean-room Tetris implementation written in Odin and Raylib.
+[![CI](https://github.com/sspencer/texas/actions/workflows/ci.yml/badge.svg)](https://github.com/sspencer/texas/actions/workflows/ci.yml)
+
+A clean-room, Guideline-style falling-block puzzle game written in Go with
+[raylib](https://www.raylib.com/) (via [raylib-go](https://github.com/gen2brain/raylib-go)).
+
+## Requirements
+
+- Go 1.27 or newer
+- A C toolchain for raylib's cgo bindings
+  - **macOS:** Xcode Command Line Tools (`xcode-select --install`)
+  - **Linux (Debian/Ubuntu):** `sudo apt-get install libgl1-mesa-dev libxi-dev libxcursor-dev libxrandr-dev libxinerama-dev libwayland-dev libxkbcommon-dev`
+  - **Windows:** a MinGW-w64 GCC on `PATH`
+
+## Install
+
+```sh
+go install github.com/sspencer/texas/cmd/texas@latest
+```
 
 ## Running
 
-Install [Odin](https://odin-lang.org/) and run (launches fullscreen by default):
+The game starts fullscreen by default:
 
 ```sh
-make run
-# or directly:
-odin run .
+make run              # or: go run ./cmd/texas
+make run-windowed     # or: go run ./cmd/texas --windowed
 ```
 
-To launch in windowed (non-fullscreen) mode:
+| Flag | Meaning |
+| --- | --- |
+| `-f`, `--fullscreen` | Start in borderless fullscreen (default) |
+| `-w`, `--windowed`, `--no-fullscreen` | Start in a window sized for your monitor |
+| `-h`, `--help` | Show usage |
+
+## Development
 
 ```sh
-make run-windowed
-# or directly:
-odin run . -- --windowed
-./bin/texas -w          # also accepts --windowed or --no-fullscreen
+make            # debug build -> bin/texas
+make release    # stripped, trimpath build -> bin/texas
+make test       # unit tests
+make race       # unit tests with the race detector
+make cover      # HTML coverage report
+make bench      # benchmarks
+make fuzz       # fuzz the game loop and SRS rotation
+make lint       # golangci-lint (config in .golangci.yml)
+make check      # vet + lint + race, as CI does
+make help       # list all targets
 ```
 
-To build, check, or run the unit tests:
+### Layout
 
-```sh
-make          # debug build -> bin/texas
-make release  # optimized build -> bin/texas
-make test     # run unit tests
-make check    # type-check and vet
-make clean    # remove bin/
 ```
+cmd/texas/          entry point: flag parsing, exit codes
+internal/game/      rules and state machine (board, scoring, T-spins, menu)
+internal/tetromino/ pieces, SRS rotation and wall kicks, 7-bag randomizer
+internal/backdrop/  generative background, drawn through a Canvas interface
+internal/layout/    logical canvas, viewport scaling, title-screen hit testing
+internal/geom/      small float32 vector and rectangle types
+internal/app/       raylib window, input mapping and rendering
+```
+
+Only `internal/app` imports raylib. The game logic is platform independent
+and fully unit tested. It receives one `game.Input` and one `time.Duration`
+per frame, so tests can drive it deterministically with a seeded
+`math/rand/v2` source.
 
 ## Features
 

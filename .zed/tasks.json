@@ -4,7 +4,7 @@
 [
   {
     "label": "Run app",
-    "command": "odin run .",
+    "command": "go run ./cmd/texas --windowed",
     "allow_concurrent_runs": false,
     "reveal": "no_focus",
     "hide": "never",

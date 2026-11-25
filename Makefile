@@ -1,41 +1,58 @@
-ODIN      := odin
-BIN_DIR   := bin
-TARGET    := $(BIN_DIR)/texas
+BIN_DIR := bin
+TARGET  := $(BIN_DIR)/texas
+PKG     := ./cmd/texas
 
-.PHONY: all build release run run-windowed test check clean help
+GO      ?= go
+GOFLAGS ?=
 
-all: build
+.DEFAULT_GOAL := build
+.PHONY: build release run run-windowed test race cover bench fuzz vet lint fmt tidy check clean help
 
-build: $(BIN_DIR)
-	$(ODIN) build . -debug -out:$(TARGET)
+build: ## Build a debug binary into bin/
+	$(GO) build $(GOFLAGS) -o $(TARGET) $(PKG)
 
-release: $(BIN_DIR)
-	$(ODIN) build . -o:speed -out:$(TARGET)
+release: ## Build a stripped, reproducible binary into bin/
+	$(GO) build $(GOFLAGS) -trimpath -ldflags="-s -w" -o $(TARGET) $(PKG)
 
-run:
-	$(ODIN) run . -- $(ARGS)
+run: ## Run fullscreen (pass ARGS=... for flags)
+	$(GO) run $(PKG) $(ARGS)
 
-run-windowed:
-	$(ODIN) run . -- --windowed
+run-windowed: ## Run in a window
+	$(GO) run $(PKG) --windowed
 
-test:
-	$(ODIN) test .
+test: ## Run unit tests
+	$(GO) test ./...
 
-check:
-	$(ODIN) check . -vet
+race: ## Run unit tests with the race detector
+	$(GO) test -race ./...
 
-clean:
-	rm -rf $(BIN_DIR)
+cover: ## Write an HTML coverage report to coverage.html
+	$(GO) test -coverprofile=coverage.out ./...
+	$(GO) tool cover -html=coverage.out -o coverage.html
 
-$(BIN_DIR):
-	mkdir -p $(BIN_DIR)
+bench: ## Run benchmarks
+	$(GO) test -run='^$$' -bench=. -benchmem ./...
 
-help:
-	@echo "Available targets:"
-	@echo "  make               Build debug binary ($(TARGET))"
-	@echo "  make release       Build optimized binary ($(TARGET))"
-	@echo "  make run           Build and run fullscreen (pass ARGS=... for flags)"
-	@echo "  make run-windowed  Build and run in windowed mode"
-	@echo "  make test          Run unit tests"
-	@echo "  make check         Type-check and vet source files"
-	@echo "  make clean         Remove build artifacts ($(BIN_DIR)/)"
+fuzz: ## Fuzz the game and rotation logic for 30s each
+	$(GO) test -run='^$$' -fuzz=FuzzStep -fuzztime=30s ./internal/game
+	$(GO) test -run='^$$' -fuzz=FuzzRotate -fuzztime=30s ./internal/tetromino
+
+vet: ## Run go vet
+	$(GO) vet ./...
+
+lint: ## Run golangci-lint
+	golangci-lint run
+
+fmt: ## Format code
+	golangci-lint fmt
+
+tidy: ## Tidy go.mod and go.sum
+	$(GO) mod tidy
+
+check: vet lint race ## Run everything CI runs
+
+clean: ## Remove build artifacts
+	rm -rf $(BIN_DIR) coverage.out coverage.html
+
+help: ## Show this help
+	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-14s %s\n", $$1, $$2}'
