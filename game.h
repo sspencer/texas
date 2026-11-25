@@ -6,6 +6,7 @@
 #include <raylib.h>
 
 #include "backdrop.h"
+#include "music.h"
 #include "tetromino.h"
 
 #define GAME_WIDTH   10
@@ -58,6 +59,7 @@ typedef enum Game_State {
 typedef enum Title_Focus {
 	TITLE_FOCUS_SPEED = 0,
 	TITLE_FOCUS_HEIGHT,
+	TITLE_FOCUS_MUSIC,
 } Title_Focus;
 
 typedef enum T_Spin_Kind {
@@ -73,6 +75,7 @@ typedef struct Vec2i {
 
 typedef struct Launch_Options {
 	bool fullscreen;
+	bool muted;
 } Launch_Options;
 
 typedef struct Title_Layout {
@@ -81,56 +84,62 @@ typedef struct Title_Layout {
 	float     grid_x;
 	float     grid_right;
 	float     div_y;
+	float     div2_y;
 	Rectangle speed_rects[MAX_START_SPEED + 1];
 	Rectangle height_rects[MAX_START_HEIGHT + 1];
+	Rectangle music_rects[MUSIC_SEL_COUNT];
 	Rectangle start_rect;
 } Title_Layout;
 
 struct Game {
-	Game_State  state;
-	Title_Focus title_focus;
-	int         title_hover_speed;
-	int         title_hover_height;
-	bool        title_hover_start;
-	int         start_speed;
-	int         start_height;
-	bool        fullscreen;
-	int         level;
-	int         total_lines;
-	int         game_score;
-	int         high_score;
-	int         combo;
-	bool        back_to_back;
-	int32_t     board[BOARD_HEIGHT][GAME_WIDTH];
-	Piece_Bag   bag;
-	Tetromino   tetro;
-	Tetromino   next_queue[NEXT_QUEUE_SIZE];
-	Tetromino   hold_tetro;
-	bool        hold_used;
-	Tetromino   ghost;
-	double      gravity_accum;
-	double      lock_timer;
-	int         lock_resets;
-	int         lowest_y;
-	bool        on_ground;
-	bool        last_action_rotate;
-	int         last_kick_index;
-	int         clear_rows[4];
-	int         clear_row_count;
-	double      clear_timer;
-	T_Spin_Kind pending_tspin;
-	double      state_timer;
-	char        banner_buf[64];
-	int         banner_len;
-	char        banner_sub_buf[64];
-	int         banner_sub_len;
-	double      banner_timer;
-	int         horiz_dir;
-	double      horiz_hold_time;
-	double      horiz_repeat_accum;
-	double      soft_drop_accum;
-	Backdrop    backdrop;
-	bool        debug;
+	Game_State      state;
+	Title_Focus     title_focus;
+	int             title_hover_speed;
+	int             title_hover_height;
+	int             title_hover_music;
+	bool            title_hover_start;
+	int             start_speed;
+	int             start_height;
+	Music_Selection start_music;
+	bool            fullscreen;
+	int             level;
+	int             total_lines;
+	int             game_score;
+	int             high_score;
+	int             combo;
+	bool            back_to_back;
+	int32_t         board[BOARD_HEIGHT][GAME_WIDTH];
+	Piece_Bag       bag;
+	Tetromino       tetro;
+	Tetromino       next_queue[NEXT_QUEUE_SIZE];
+	Tetromino       hold_tetro;
+	bool            hold_used;
+	Tetromino       ghost;
+	double          gravity_accum;
+	double          lock_timer;
+	int             lock_resets;
+	int             lowest_y;
+	bool            on_ground;
+	bool            last_action_rotate;
+	int             last_kick_index;
+	int             clear_rows[4];
+	int             clear_row_count;
+	double          clear_timer;
+	T_Spin_Kind     pending_tspin;
+	double          state_timer;
+	char            banner_buf[64];
+	int             banner_len;
+	char            banner_sub_buf[64];
+	int             banner_sub_len;
+	double          banner_timer;
+	int             horiz_dir;
+	double          horiz_hold_time;
+	double          horiz_repeat_accum;
+	double          soft_drop_accum;
+	Backdrop        backdrop;
+	Music_Engine    music;
+	bool            music_danger;
+	bool            debug;
 };
 
 // CLI & Window helpers
@@ -176,6 +185,9 @@ bool        collide(const Game *g, Tetromino t);
 void        clear_board(Game *g);
 int         clear_lines(Game *g);
 double      level_time(int level);
+void        toggle_music_mute(Game *g);
+void        cycle_music_selection(Game *g, int delta);
+bool        is_board_in_danger(const Game *g);
 
 // Rendering
 void        draw_game(const Game *g);

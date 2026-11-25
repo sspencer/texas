@@ -30,7 +30,8 @@ make clean    # remove bin/
 
 ## Features
 
-- **Title Screen (Nintendo-Style Setup)**: Choose starting **Speed (0–9)** and **Height (0–5)** with mouse/trackpad or keyboard before starting; defaults to Speed `0` (slowest) and Height `0` (clear board).
+- **Title Screen (Nintendo-Style Setup)**: Choose starting **Speed (0–9)**, **Height (0–5)**, and **Music (`1`, `2`, `3`, `OFF`)** with mouse/trackpad or keyboard before starting; defaults to Speed `0` (slowest), Height `0` (clear board), and Music `1`.
+- **NES-Style 8-Bit Music & Sound Effects**: Built-in pure-C NES 2A03 chiptune synthesizer (band-limited Pulse 1 & 2, 4-bit quantized Triangle bass, and 15-bit LFSR Noise percussion) with a Title theme, three selectable gameplay tracks (**1: Sugar Plum**, **2: Tetra March**, **3: Korobeiniki**), a Game Over cadence, live Title-screen previews, danger-tempo speedup, and full Tetris sound effects (move, rotate, lock, hard drop, hold, 1–3 line clears, a distinct 4-line **Tetris** fanfare, T-Spin shimmer, level-up fanfare, pause chime, and countdown ticks). Sound effects continue playing even when background music is set to `OFF`.
 - **Ghost Piece (Block Shadow)**: Color-matched landing preview rendered beneath the active piece, always synchronized across moves, rotations, wall kicks, and holds.
 - **Super Rotation System (SRS)**: Accurate Guideline spawn shapes (`I`, `O`, `T`, `S`, `Z`, `J`, `L`), clockwise/counter-clockwise rotations, and full `JLSTZ` and `I` wall-kick tables.
 - **7-Bag Randomizer & Next Queue**: Fair Guideline 7-bag piece generation with a 3-piece Next preview.
@@ -50,6 +51,8 @@ make clean    # remove bin/
 | `Z` / `Left Ctrl` | Rotate counter-clockwise |
 | `C` / `Shift` | Hold piece |
 | `F` / `F11` | Toggle fullscreen / windowed |
+| `M` | Mute / unmute background music |
+| `[` / `]` | Cycle background music track during play |
 | `P` | Pause / Resume |
 | `T` | Return to Title Screen (from Pause or Game Over) |
 | `D` | Toggle debug mode (freezes gravity; enables `N` next-piece skip and `G` game-over test) |

@@ -227,6 +227,7 @@ bool rotate_with_kick(Game *g, bool clockwise, int *out_kick_index) {
 			g->last_kick_index = test_idx;
 			on_piece_manipulated(g);
 			update_ghost(g);
+			music_play_sfx(&g->music, SFX_ROTATE);
 			if (out_kick_index) {
 				*out_kick_index = test_idx;
 			}

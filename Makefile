@@ -3,10 +3,10 @@ BIN_DIR       := bin
 TARGET        := $(BIN_DIR)/texas
 TEST_TARGET   := $(BIN_DIR)/texas_test
 
-CORE_SRCS     := game.c tetromino.c backdrop.c
+CORE_SRCS     := game.c tetromino.c backdrop.c music.c
 APP_SRCS      := main.c $(CORE_SRCS)
 TEST_SRCS     := texas_test.c $(CORE_SRCS)
-HEADERS       := game.h tetromino.h backdrop.h
+HEADERS       := game.h tetromino.h backdrop.h music.h
 
 RAYLIB_CFLAGS := $(shell pkg-config --cflags raylib 2>/dev/null || echo -I/opt/homebrew/include)
 RAYLIB_LIBS   := $(shell pkg-config --libs raylib 2>/dev/null || echo -L/opt/homebrew/lib -lraylib)

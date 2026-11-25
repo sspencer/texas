@@ -34,6 +34,7 @@ static double clamp_f64(double v, double lo, double hi) {
 
 void parse_cli_args(int argc, const char *const *argv, Launch_Options *opts, bool *show_help, const char **err) {
 	opts->fullscreen = true;
+	opts->muted = false;
 	*show_help = false;
 	*err = NULL;
 
@@ -43,6 +44,8 @@ void parse_cli_args(int argc, const char *const *argv, Launch_Options *opts, boo
 			opts->fullscreen = false;
 		} else if (strcmp(arg, "-f") == 0 || strcmp(arg, "--fullscreen") == 0) {
 			opts->fullscreen = true;
+		} else if (strcmp(arg, "-m") == 0 || strcmp(arg, "--mute") == 0 || strcmp(arg, "--no-music") == 0) {
+			opts->muted = true;
 		} else if (strcmp(arg, "-h") == 0 || strcmp(arg, "--help") == 0) {
 			*show_help = true;
 			return;
@@ -58,6 +61,7 @@ void print_usage(const char *prog) {
 	printf("Options:\n");
 	printf("  -w, --windowed, --no-fullscreen  Start in windowed mode (default: fullscreen)\n");
 	printf("  -f, --fullscreen                 Start in fullscreen mode (default)\n");
+	printf("  -m, --mute, --no-music           Start with background music muted\n");
 	printf("  -h, --help                       Show this help message\n");
 }
 
@@ -133,7 +137,7 @@ bool point_in_rect(Vector2 p, Rectangle r) {
 Title_Layout compute_title_layout(void) {
 	Title_Layout layout = {0};
 	float card_w = (float)(BASE_WIDTH - OUTER_MARGIN * 2); // 588px
-	layout.card_outer = (Rectangle){(float)OUTER_MARGIN, 174.0f, card_w, 404.0f};
+	layout.card_outer = (Rectangle){(float)OUTER_MARGIN, 148.0f, card_w, 412.0f};
 	layout.card_inner = (Rectangle){
 		layout.card_outer.x + (float)BORDER_SIZE,
 		layout.card_outer.y + (float)BORDER_SIZE,
@@ -142,19 +146,21 @@ Title_Layout compute_title_layout(void) {
 	};
 
 	float btn_w = 86.0f;
-	float btn_h = 46.0f;
+	float btn_h = 38.0f;
 	float btn_gap = 14.0f;
+	float row_gap = 10.0f;
 	float speed_grid_w = 5.0f * btn_w + 4.0f * btn_gap; // 486px
 	layout.grid_x = layout.card_inner.x + (layout.card_inner.width - speed_grid_w) * 0.5f;
 	layout.grid_right = layout.grid_x + speed_grid_w;
-	layout.div_y = layout.card_inner.y + 174.0f;
+	layout.div_y = layout.card_inner.y + 138.0f;
+	layout.div2_y = layout.div_y + 92.0f;
 
 	for (int i = 0; i <= MAX_START_SPEED; i++) {
 		int row = i / 5;
 		int col = i % 5;
 		layout.speed_rects[i] = (Rectangle){
 			layout.grid_x + (float)col * (btn_w + btn_gap),
-			layout.card_inner.y + 52.0f + (float)row * (btn_h + btn_gap),
+			layout.card_inner.y + 42.0f + (float)row * (btn_h + row_gap),
 			btn_w,
 			btn_h,
 		};
@@ -165,19 +171,41 @@ Title_Layout compute_title_layout(void) {
 	for (int i = 0; i <= MAX_START_HEIGHT; i++) {
 		layout.height_rects[i] = (Rectangle){
 			layout.grid_x + (float)i * (h_btn_w + h_btn_gap),
-			layout.div_y + 52.0f,
+			layout.div_y + 42.0f,
 			h_btn_w,
+			btn_h,
+		};
+	}
+
+	float m_btn_gap = 14.0f;
+	float m_btn_w = (speed_grid_w - (float)(MUSIC_SEL_COUNT - 1) * m_btn_gap) / (float)MUSIC_SEL_COUNT;
+	for (int i = 0; i < MUSIC_SEL_COUNT; i++) {
+		layout.music_rects[i] = (Rectangle){
+			layout.grid_x + (float)i * (m_btn_w + m_btn_gap),
+			layout.div2_y + 42.0f,
+			m_btn_w,
 			btn_h,
 		};
 	}
 
 	layout.start_rect = (Rectangle){
 		layout.grid_x,
-		layout.card_inner.y + layout.card_inner.height - 64.0f,
+		layout.card_inner.y + layout.card_inner.height - 56.0f,
 		speed_grid_w,
-		46.0f,
+		44.0f,
 	};
 	return layout;
+}
+
+static void preview_selected_music(Game *g) {
+	Music_Song song = music_song_for_selection(g->start_music);
+	music_set_paused(&g->music, false);
+	music_set_danger(&g->music, false);
+	if (song == SONG_NONE) {
+		music_stop(&g->music);
+	} else {
+		music_play_song(&g->music, song);
+	}
 }
 
 void init_game(Game *g) {
@@ -186,16 +214,21 @@ void init_game(Game *g) {
 	g->title_focus = TITLE_FOCUS_SPEED;
 	g->title_hover_speed = -1;
 	g->title_hover_height = -1;
+	g->title_hover_music = -1;
 	g->title_hover_start = false;
 	g->start_speed = 0;
 	g->start_height = 0;
+	g->start_music = MUSIC_SEL_1;
 	g->level = 0;
 	g->total_lines = 0;
 	g->game_score = 0;
 	g->combo = -1;
 	g->back_to_back = false;
+	g->music_danger = false;
 	clear_board(g);
 	init_backdrop(&g->backdrop, false);
+	music_init(&g->music);
+	music_play_song(&g->music, SONG_TITLE);
 }
 
 void return_to_title(Game *g) {
@@ -203,37 +236,82 @@ void return_to_title(Game *g) {
 	g->state = STATE_TITLE;
 	g->title_hover_speed = -1;
 	g->title_hover_height = -1;
+	g->title_hover_music = -1;
 	g->title_hover_start = false;
 	g->banner_timer = 0.0;
 	g->horiz_dir = 0;
 	g->horiz_hold_time = 0.0;
 	g->horiz_repeat_accum = 0.0;
 	g->soft_drop_accum = 0.0;
+	g->music_danger = false;
+	music_set_paused(&g->music, false);
+	music_set_danger(&g->music, false);
+	if (g->start_music != MUSIC_SEL_OFF) {
+		music_play_song(&g->music, SONG_TITLE);
+	} else {
+		music_stop(&g->music);
+	}
 }
 
 void title_adjust_value(Game *g, int delta) {
 	switch (g->title_focus) {
-	case TITLE_FOCUS_SPEED:
-		g->start_speed = clamp_int(g->start_speed + delta, 0, MAX_START_SPEED);
+	case TITLE_FOCUS_SPEED: {
+		int next = clamp_int(g->start_speed + delta, 0, MAX_START_SPEED);
+		if (next != g->start_speed) {
+			g->start_speed = next;
+			music_play_sfx(&g->music, SFX_MENU_MOVE);
+		}
 		break;
-	case TITLE_FOCUS_HEIGHT:
-		g->start_height = clamp_int(g->start_height + delta, 0, MAX_START_HEIGHT);
+	}
+	case TITLE_FOCUS_HEIGHT: {
+		int next = clamp_int(g->start_height + delta, 0, MAX_START_HEIGHT);
+		if (next != g->start_height) {
+			g->start_height = next;
+			music_play_sfx(&g->music, SFX_MENU_MOVE);
+		}
 		break;
+	}
+	case TITLE_FOCUS_MUSIC: {
+		Music_Selection next = (Music_Selection)clamp_int((int)g->start_music + delta, 0, MUSIC_SEL_COUNT - 1);
+		if (next != g->start_music) {
+			g->start_music = next;
+			preview_selected_music(g);
+			music_play_sfx(&g->music, SFX_MENU_MOVE);
+		}
+		break;
+	}
 	}
 }
 
 void title_set_value(Game *g, int value) {
 	switch (g->title_focus) {
 	case TITLE_FOCUS_SPEED:
-		if (value >= 0 && value <= MAX_START_SPEED) {
+		if (value >= 0 && value <= MAX_START_SPEED && value != g->start_speed) {
 			g->start_speed = value;
+			music_play_sfx(&g->music, SFX_MENU_MOVE);
 		}
 		break;
 	case TITLE_FOCUS_HEIGHT:
-		if (value >= 0 && value <= MAX_START_HEIGHT) {
+		if (value >= 0 && value <= MAX_START_HEIGHT && value != g->start_height) {
 			g->start_height = value;
+			music_play_sfx(&g->music, SFX_MENU_MOVE);
 		}
 		break;
+	case TITLE_FOCUS_MUSIC: {
+		// Keys 1..3 pick Music 1..3; key 0 picks Off
+		Music_Selection sel = g->start_music;
+		if (value >= 1 && value <= 3) {
+			sel = (Music_Selection)(value - 1);
+		} else if (value == 0) {
+			sel = MUSIC_SEL_OFF;
+		}
+		if (sel != g->start_music) {
+			g->start_music = sel;
+			preview_selected_music(g);
+			music_play_sfx(&g->music, SFX_MENU_MOVE);
+		}
+		break;
+	}
 	}
 }
 
@@ -311,6 +389,17 @@ void start_new_game(Game *g) {
 		set_tetromino(&g->next_queue[i], bag_next(&g->bag));
 	}
 
+	g->music_danger = is_board_in_danger(g);
+	music_set_paused(&g->music, false);
+	music_set_danger(&g->music, g->music_danger);
+	Music_Song song = music_song_for_selection(g->start_music);
+	if (song == SONG_NONE) {
+		music_stop(&g->music);
+	} else {
+		music_play_song(&g->music, song);
+	}
+	music_play_sfx(&g->music, SFX_MENU_START);
+
 	spawn_next_tetro(g);
 }
 
@@ -351,12 +440,23 @@ void set_game_over(Game *g) {
 	g->horiz_hold_time = 0.0;
 	g->horiz_repeat_accum = 0.0;
 	g->soft_drop_accum = 0.0;
+	g->music_danger = false;
+	music_set_paused(&g->music, false);
+	music_set_danger(&g->music, false);
+	if (g->start_music != MUSIC_SEL_OFF) {
+		music_play_song(&g->music, SONG_GAME_OVER);
+	} else {
+		music_stop(&g->music);
+	}
 }
 
 void begin_restart_countdown(Game *g) {
 	clear_board(g);
 	g->state = STATE_COUNTDOWN;
 	g->state_timer = GAME_LAUNCH_TIME;
+	g->music_danger = false;
+	music_stop(&g->music);
+	music_play_sfx(&g->music, SFX_COUNTDOWN);
 }
 
 void update_high_score(Game *g) {
@@ -423,6 +523,8 @@ void on_piece_manipulated(Game *g) {
 	}
 }
 
+static void lock_piece_internal(Game *g, bool from_hard_drop);
+
 // Attempts to move the active tetromino by dir. Updates ghost and lock reset state.
 bool move_tetro(Game *g, Vec2i dir) {
 	g->tetro.x += dir.x;
@@ -437,6 +539,7 @@ bool move_tetro(Game *g, Vec2i dir) {
 	g->last_action_rotate = false;
 	if (dir.x != 0) {
 		on_piece_manipulated(g);
+		music_play_sfx(&g->music, SFX_MOVE);
 	} else if (dir.y > 0) {
 		g->lock_timer = 0.0;
 		if (g->tetro.y > g->lowest_y) {
@@ -475,7 +578,8 @@ int hard_drop(Game *g) {
 		update_high_score(g);
 	}
 
-	lock_current_piece(g);
+	music_play_sfx(&g->music, SFX_HARD_DROP);
+	lock_piece_internal(g, true);
 	return dropped;
 }
 
@@ -501,6 +605,7 @@ bool hold_piece(Game *g) {
 	}
 
 	g->hold_used = true;
+	music_play_sfx(&g->music, SFX_HOLD);
 	return true;
 }
 
@@ -566,7 +671,7 @@ T_Spin_Kind detect_tspin(const Game *g) {
 }
 
 // Locks the active piece into the board, checks Lock-Out, detects full lines, and triggers clear or spawn.
-void lock_current_piece(Game *g) {
+static void lock_piece_internal(Game *g, bool from_hard_drop) {
 	T_Spin_Kind tspin = detect_tspin(g);
 	bool any_visible = false;
 
@@ -599,15 +704,27 @@ void lock_current_piece(Game *g) {
 		g->clear_timer = LINE_CLEAR_DURATION;
 		g->pending_tspin = tspin;
 		g->state = STATE_LINE_CLEAR;
+		if (row_count >= 4) {
+			music_play_sfx(&g->music, SFX_TETRIS);
+		} else {
+			music_play_sfx(&g->music, SFX_LINE_CLEAR);
+			if (tspin != TSPIN_NONE) {
+				music_play_sfx(&g->music, SFX_TSPIN);
+			}
+		}
 		return;
 	}
 
 	// No lines cleared
+	if (!from_hard_drop) {
+		music_play_sfx(&g->music, SFX_LOCK);
+	}
 	g->combo = -1;
 	if (tspin != TSPIN_NONE) {
 		int pts = compute_score(g->level, 0, tspin, false);
 		g->game_score += pts;
 		update_high_score(g);
+		music_play_sfx(&g->music, SFX_TSPIN);
 		if (tspin == TSPIN_FULL) {
 			set_banner(g, "T-SPIN!", "");
 		} else {
@@ -616,6 +733,10 @@ void lock_current_piece(Game *g) {
 	}
 
 	spawn_next_tetro(g);
+}
+
+void lock_current_piece(Game *g) {
+	lock_piece_internal(g, false);
 }
 
 int find_full_rows(Game *g) {
@@ -661,8 +782,12 @@ void finish_line_clear(Game *g) {
 	g->game_score += points;
 	update_high_score(g);
 
+	int prev_level = g->level;
 	g->total_lines += lines;
 	g->level = g->start_speed + g->total_lines / 10;
+	if (g->level > prev_level) {
+		music_play_sfx(&g->music, SFX_LEVEL_UP);
+	}
 
 	const char *title = "";
 	switch (tspin) {
@@ -754,6 +879,7 @@ bool update_title_pointer(Game *g, Vector2 ui_pos, bool clicked) {
 	Title_Layout layout = compute_title_layout();
 	g->title_hover_speed = -1;
 	g->title_hover_height = -1;
+	g->title_hover_music = -1;
 	g->title_hover_start = false;
 
 	for (int i = 0; i <= MAX_START_SPEED; i++) {
@@ -762,6 +888,7 @@ bool update_title_pointer(Game *g, Vector2 ui_pos, bool clicked) {
 			if (clicked) {
 				g->start_speed = i;
 				g->title_focus = TITLE_FOCUS_SPEED;
+				music_play_sfx(&g->music, SFX_MENU_MOVE);
 			}
 			return true;
 		}
@@ -773,6 +900,20 @@ bool update_title_pointer(Game *g, Vector2 ui_pos, bool clicked) {
 			if (clicked) {
 				g->start_height = i;
 				g->title_focus = TITLE_FOCUS_HEIGHT;
+				music_play_sfx(&g->music, SFX_MENU_MOVE);
+			}
+			return true;
+		}
+	}
+
+	for (int i = 0; i < MUSIC_SEL_COUNT; i++) {
+		if (point_in_rect(ui_pos, layout.music_rects[i])) {
+			g->title_hover_music = i;
+			if (clicked) {
+				g->start_music = (Music_Selection)i;
+				g->title_focus = TITLE_FOCUS_MUSIC;
+				preview_selected_music(g);
+				music_play_sfx(&g->music, SFX_MENU_MOVE);
 			}
 			return true;
 		}
@@ -802,9 +943,13 @@ static void handle_title_input(Game *g) {
 		return;
 	}
 
-	if (IsKeyPressed(KEY_UP) || IsKeyPressed(KEY_DOWN) || IsKeyPressed(KEY_TAB) ||
-	    IsKeyPressed(KEY_W) || IsKeyPressed(KEY_S)) {
-		g->title_focus = (g->title_focus == TITLE_FOCUS_SPEED) ? TITLE_FOCUS_HEIGHT : TITLE_FOCUS_SPEED;
+	if (IsKeyPressed(KEY_UP) || IsKeyPressed(KEY_W)) {
+		g->title_focus = (Title_Focus)(((int)g->title_focus + 2) % 3);
+		music_play_sfx(&g->music, SFX_MENU_MOVE);
+	}
+	if (IsKeyPressed(KEY_DOWN) || IsKeyPressed(KEY_S) || IsKeyPressed(KEY_TAB)) {
+		g->title_focus = (Title_Focus)(((int)g->title_focus + 1) % 3);
+		music_play_sfx(&g->music, SFX_MENU_MOVE);
 	}
 
 	if (IsKeyPressed(KEY_LEFT) || IsKeyPressed(KEY_A)) {
@@ -838,6 +983,9 @@ void handle_input(Game *g, double frame_dt) {
 	if (IsKeyPressed(KEY_F) || IsKeyPressed(KEY_F11)) {
 		toggle_fullscreen(g);
 	}
+	if (IsKeyPressed(KEY_M)) {
+		toggle_music_mute(g);
+	}
 
 	if (g->state == STATE_TITLE) {
 		handle_title_input(g);
@@ -847,9 +995,13 @@ void handle_input(Game *g, double frame_dt) {
 	if (IsKeyPressed(KEY_P)) {
 		if (g->state == STATE_PLAYING) {
 			g->state = STATE_PAUSED;
+			music_set_paused(&g->music, true);
+			music_play_sfx(&g->music, SFX_PAUSE);
 			return;
 		} else if (g->state == STATE_PAUSED) {
 			g->state = STATE_PLAYING;
+			music_set_paused(&g->music, false);
+			music_play_sfx(&g->music, SFX_PAUSE);
 			return;
 		}
 	}
@@ -973,12 +1125,44 @@ void handle_input(Game *g, double frame_dt) {
 	if (!g->debug && IsKeyPressed(KEY_SPACE)) {
 		hard_drop(g);
 	}
+
+	// Cycle background music tracks during play
+	if (IsKeyPressed(KEY_LEFT_BRACKET)) {
+		cycle_music_selection(g, -1);
+	}
+	if (IsKeyPressed(KEY_RIGHT_BRACKET)) {
+		cycle_music_selection(g, 1);
+	}
+}
+
+static void update_music_danger(Game *g) {
+	// Hysteresis: enter danger when stack reaches top 6 visible rows, exit below top 7
+	int check_rows = g->music_danger ? 7 : 6;
+	bool high = false;
+	for (int y = HIDDEN_ROWS; y < HIDDEN_ROWS + check_rows && !high; y++) {
+		for (int x = 0; x < GAME_WIDTH; x++) {
+			if (g->board[y][x] != 0) {
+				high = true;
+				break;
+			}
+		}
+	}
+	if (high != g->music_danger) {
+		g->music_danger = high;
+		music_set_danger(&g->music, high);
+	}
 }
 
 // Advances game timers, gravity, lock delay, line clear animation, and restart countdown.
 void update_game(Game *g, double frame_dt) {
+	music_set_paused(&g->music, g->state == STATE_PAUSED);
+
 	if (g->state != STATE_PAUSED) {
 		update_backdrop(&g->backdrop, frame_dt);
+	}
+
+	if (g->state == STATE_PLAYING || g->state == STATE_LINE_CLEAR) {
+		update_music_danger(g);
 	}
 
 	if (g->banner_timer > 0.0) {
@@ -1002,12 +1186,17 @@ void update_game(Game *g, double frame_dt) {
 		}
 		return;
 
-	case STATE_COUNTDOWN:
+	case STATE_COUNTDOWN: {
+		int prev_count = (int)floor(g->state_timer);
 		g->state_timer -= frame_dt;
+		int new_count = (int)floor(g->state_timer);
 		if (g->state_timer <= 1.0) {
 			start_new_game(g);
+		} else if (new_count < prev_count && new_count >= 1) {
+			music_play_sfx(&g->music, SFX_COUNTDOWN);
 		}
 		return;
+	}
 
 	case STATE_LINE_CLEAR:
 		g->clear_timer -= frame_dt;
@@ -1114,6 +1303,49 @@ double level_time(int level) {
 	return (t > 0.016) ? t : 0.016;
 }
 
+void toggle_music_mute(Game *g) {
+	music_set_muted(&g->music, !g->music.muted);
+	if (g->state == STATE_PLAYING) {
+		set_banner(g, g->music.muted ? "MUSIC MUTED" : "MUSIC ON", music_selection_name(g->start_music));
+	}
+}
+
+void cycle_music_selection(Game *g, int delta) {
+	int idx = ((int)g->start_music + delta) % MUSIC_SEL_COUNT;
+	if (idx < 0) {
+		idx += MUSIC_SEL_COUNT;
+	}
+	g->start_music = (Music_Selection)idx;
+	Music_Song song = music_song_for_selection(g->start_music);
+	if (song == SONG_NONE) {
+		music_stop(&g->music);
+	} else {
+		music_set_muted(&g->music, false);
+		music_set_danger(&g->music, g->music_danger);
+		music_play_song(&g->music, song);
+	}
+	if (g->state == STATE_PLAYING) {
+		char sub[64];
+		if (g->start_music == MUSIC_SEL_OFF) {
+			set_banner(g, "MUSIC OFF", "");
+		} else {
+			snprintf(sub, sizeof(sub), "TRACK %s", music_selection_short_label(g->start_music));
+			set_banner(g, music_selection_name(g->start_music), sub);
+		}
+	}
+}
+
+bool is_board_in_danger(const Game *g) {
+	for (int y = HIDDEN_ROWS; y < HIDDEN_ROWS + 6; y++) {
+		for (int x = 0; x < GAME_WIDTH; x++) {
+			if (g->board[y][x] != 0) {
+				return true;
+			}
+		}
+	}
+	return false;
+}
+
 // =============================================================================
 // Rendering
 // =============================================================================
@@ -1196,24 +1428,24 @@ static void draw_title_screen(const Game *g) {
 
 	// Stylized title logo with shadow
 	const char *title = "TEXAS";
-	int title_font = 80;
+	int title_font = 72;
 	int tw = MeasureText(title, title_font);
-	DrawText(title, center_x - tw / 2 + 4, 24 + 4, title_font, (Color){16, 20, 30, 220});
-	DrawText(title, center_x - tw / 2, 24, title_font, WHITE);
+	DrawText(title, center_x - tw / 2 + 4, 16 + 4, title_font, (Color){16, 20, 30, 220});
+	DrawText(title, center_x - tw / 2, 16, title_font, WHITE);
 
 	// Decorative bar of the 7 tetromino colors
-	float swatch_size = 24.0f;
+	float swatch_size = 20.0f;
 	float swatch_gap = 8.0f;
 	float swatch_total = 7.0f * swatch_size + 6.0f * swatch_gap;
 	float swatch_x = ((float)BASE_WIDTH - swatch_total) * 0.5f;
 	for (int id = 1; id <= 7; id++) {
-		draw_block_px(swatch_x, 110.0f, swatch_size, TETRO_COLOR[id]);
+		draw_block_px(swatch_x, 94.0f, swatch_size, TETRO_COLOR[id]);
 		swatch_x += swatch_size + swatch_gap;
 	}
 
-	const char *sub = "SELECT STARTING SPEED & HEIGHT";
-	int sub_w = MeasureText(sub, 16);
-	DrawText(sub, center_x - sub_w / 2, 146, 16, TEXT_MUTED);
+	const char *sub = "SELECT SPEED, HEIGHT & MUSIC";
+	int sub_w = MeasureText(sub, 15);
+	DrawText(sub, center_x - sub_w / 2, 123, 15, TEXT_MUTED);
 
 	// Main setup card (centered symmetrically across BASE_WIDTH)
 	Rectangle card = draw_panel_card(layout.card_outer);
@@ -1225,14 +1457,14 @@ static void draw_title_screen(const Game *g) {
 	Color speed_accent = speed_active ? (Color){0, 210, 240, 255} : TEXT_MUTED;
 
 	if (speed_active) {
-		DrawText(">", (int)(grid_x - 22.0f), (int)(card.y + 18.0f), 22, speed_accent);
+		DrawText(">", (int)(grid_x - 22.0f), (int)(card.y + 12.0f), 20, speed_accent);
 	}
-	DrawText("SPEED", (int)grid_x, (int)(card.y + 18.0f), 22, speed_active ? WHITE : TEXT_MUTED);
+	DrawText("SPEED", (int)grid_x, (int)(card.y + 12.0f), 20, speed_active ? WHITE : TEXT_MUTED);
 
 	char speed_info[64];
 	snprintf(speed_info, sizeof(speed_info), "Level %d  (%.2fs/row)", g->start_speed, level_time(g->start_speed));
-	int si_w = MeasureText(speed_info, 16);
-	DrawText(speed_info, (int)grid_right - si_w, (int)(card.y + 22.0f), 16, speed_accent);
+	int si_w = MeasureText(speed_info, 15);
+	DrawText(speed_info, (int)grid_right - si_w, (int)(card.y + 16.0f), 15, speed_accent);
 
 	for (int i = 0; i <= MAX_START_SPEED; i++) {
 		char num[8];
@@ -1246,7 +1478,7 @@ static void draw_title_screen(const Game *g) {
 		);
 	}
 
-	// Divider
+	// Divider 1
 	float div_y = layout.div_y;
 	DrawLineEx((Vector2){grid_x, div_y}, (Vector2){grid_right, div_y}, 1.0f, GRID_COLOR);
 
@@ -1255,9 +1487,9 @@ static void draw_title_screen(const Game *g) {
 	Color height_accent = height_active ? (Color){245, 210, 80, 255} : TEXT_MUTED;
 
 	if (height_active) {
-		DrawText(">", (int)(grid_x - 22.0f), (int)(div_y + 16.0f), 22, height_accent);
+		DrawText(">", (int)(grid_x - 22.0f), (int)(div_y + 12.0f), 20, height_accent);
 	}
-	DrawText("HEIGHT", (int)grid_x, (int)(div_y + 16.0f), 22, height_active ? WHITE : TEXT_MUTED);
+	DrawText("HEIGHT", (int)grid_x, (int)(div_y + 12.0f), 20, height_active ? WHITE : TEXT_MUTED);
 
 	int height_rows = HEIGHT_ROWS[g->start_height];
 	char height_info[64];
@@ -1266,8 +1498,8 @@ static void draw_title_screen(const Game *g) {
 	} else {
 		snprintf(height_info, sizeof(height_info), "%d Garbage Rows", height_rows);
 	}
-	int hi_w = MeasureText(height_info, 16);
-	DrawText(height_info, (int)grid_right - hi_w, (int)(div_y + 20.0f), 16, height_accent);
+	int hi_w = MeasureText(height_info, 15);
+	DrawText(height_info, (int)grid_right - hi_w, (int)(div_y + 16.0f), 15, height_accent);
 
 	for (int i = 0; i <= MAX_START_HEIGHT; i++) {
 		char num[8];
@@ -1278,6 +1510,38 @@ static void draw_title_screen(const Game *g) {
 			i == g->start_height,
 			height_active,
 			i == g->title_hover_height
+		);
+	}
+
+	// Divider 2
+	float div2_y = layout.div2_y;
+	DrawLineEx((Vector2){grid_x, div2_y}, (Vector2){grid_right, div2_y}, 1.0f, GRID_COLOR);
+
+	// --- MUSIC (1 / 2 / 3 / OFF) ---
+	bool music_active = (g->title_focus == TITLE_FOCUS_MUSIC);
+	Color music_accent = music_active ? (Color){185, 130, 255, 255} : TEXT_MUTED;
+
+	if (music_active) {
+		DrawText(">", (int)(grid_x - 22.0f), (int)(div2_y + 12.0f), 20, music_accent);
+	}
+	DrawText("MUSIC", (int)grid_x, (int)(div2_y + 12.0f), 20, music_active ? WHITE : TEXT_MUTED);
+
+	char music_info[64];
+	if (g->music.muted) {
+		snprintf(music_info, sizeof(music_info), "%s (Muted)", music_selection_name(g->start_music));
+	} else {
+		snprintf(music_info, sizeof(music_info), "%s", music_selection_name(g->start_music));
+	}
+	int mi_w = MeasureText(music_info, 15);
+	DrawText(music_info, (int)grid_right - mi_w, (int)(div2_y + 16.0f), 15, music_accent);
+
+	for (int i = 0; i < MUSIC_SEL_COUNT; i++) {
+		draw_title_option_tile(
+			layout.music_rects[i],
+			music_selection_short_label((Music_Selection)i),
+			i == (int)g->start_music,
+			music_active,
+			i == g->title_hover_music
 		);
 	}
 
@@ -1292,7 +1556,7 @@ static void draw_title_screen(const Game *g) {
 	DrawText(
 		start_label,
 		(int)(start_box.x + (start_box.width - (float)sl_w) * 0.5f),
-		(int)(start_box.y + 14.0f),
+		(int)(start_box.y + 13.0f),
 		18,
 		WHITE
 	);
@@ -1302,17 +1566,17 @@ static void draw_title_screen(const Game *g) {
 		char hs[64];
 		snprintf(hs, sizeof(hs), "HIGH SCORE: %d", g->high_score);
 		int hs_w = MeasureText(hs, 18);
-		DrawText(hs, center_x - hs_w / 2, 588, 18, (Color){245, 210, 80, 255});
+		DrawText(hs, center_x - hs_w / 2, 574, 18, (Color){245, 210, 80, 255});
 	}
 
 	// Footer hints
-	const char *hint1 = "Click or Arrows / 0-9: Choose Speed & Height";
+	const char *hint1 = "Click or Arrows / 0-9: Choose Speed, Height & Music";
 	int h1_w = MeasureText(hint1, 14);
-	DrawText(hint1, center_x - h1_w / 2, 616, 14, TEXT_MUTED);
+	DrawText(hint1, center_x - h1_w / 2, 608, 14, TEXT_MUTED);
 
-	const char *hint2 = "Click Start or Enter / Space    F: Fullscreen    Esc: Quit";
+	const char *hint2 = "Enter / Space: Start    M: Mute    F: Fullscreen    Esc: Quit";
 	int h2_w = MeasureText(hint2, 14);
-	DrawText(hint2, center_x - h2_w / 2, 638, 14, TEXT_MUTED);
+	DrawText(hint2, center_x - h2_w / 2, 632, 14, TEXT_MUTED);
 }
 
 static void draw_board(const Game *g) {
@@ -1557,7 +1821,7 @@ static void draw_side_panel(const Game *g) {
 	float ctrl_y = pieces_y + 266.0f + 12.0f;
 	Rectangle ctrl_inner = draw_panel_card((Rectangle){panel_x, ctrl_y, panel_w, 152.0f});
 	int cx = (int)(ctrl_inner.x + 12.0f);
-	int cy = (int)(ctrl_inner.y + 6.0f);
+	int cy = (int)(ctrl_inner.y + 5.0f);
 	typedef struct Control_Entry {
 		const char *keys;
 		const char *action;
@@ -1568,14 +1832,30 @@ static void draw_side_panel(const Game *g) {
 		{"Space", "Hard Drop"},
 		{"Up / X / Z", "Rotate"},
 		{"C / Shift", "Hold"},
-		{"F / F11", "Fullscreen"},
-		{"P", "Pause"},
+		{"F / P", "Full / Pause"},
+		{"M / [ ]", "Mute / Track"},
 	};
 	for (int i = 0; i < 7; i++) {
-		DrawText(controls[i].keys, cx, cy, 14, WHITE);
-		DrawText(controls[i].action, cx + 110, cy, 14, TEXT_MUTED);
-		cy += 18;
+		DrawText(controls[i].keys, cx, cy, 13, WHITE);
+		DrawText(controls[i].action, cx + 104, cy, 13, TEXT_MUTED);
+		cy += 16;
 	}
+
+	char music_status[64];
+	if (g->music.muted) {
+		snprintf(music_status, sizeof(music_status), "Music: Muted");
+	} else if (g->start_music == MUSIC_SEL_OFF) {
+		snprintf(music_status, sizeof(music_status), "Music: Off");
+	} else {
+		snprintf(music_status, sizeof(music_status), "Music: %s%s",
+		         music_selection_name(g->start_music),
+		         g->music_danger ? " (!)" : "");
+	}
+	Color music_col = g->music_danger ? (Color){255, 165, 95, 255} : (Color){185, 155, 240, 255};
+	if (g->music.muted || g->start_music == MUSIC_SEL_OFF) {
+		music_col = TEXT_MUTED;
+	}
+	DrawText(music_status, cx, cy + 2, 13, music_col);
 }
 
 static void draw_banner(const Game *g) {

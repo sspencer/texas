@@ -31,9 +31,14 @@ int main(int argc, char **argv) {
 	InitWindow(BASE_WIDTH, BASE_HEIGHT, "Texas");
 	SetWindowMinSize(BASE_WIDTH / 2, BASE_HEIGHT / 2);
 	SetTargetFPS(120);
+	InitAudioDevice();
 
 	Game game;
 	init_game(&game);
+	if (opts.muted) {
+		music_set_muted(&game.music, true);
+	}
+	music_open_audio(&game.music);
 
 	if (opts.fullscreen) {
 		toggle_fullscreen(&game);
@@ -48,9 +53,12 @@ int main(int argc, char **argv) {
 		}
 		handle_input(&game, frame_dt);
 		update_game(&game, frame_dt);
+		music_update_audio(&game.music);
 		draw_game(&game);
 	}
 
+	music_close_audio(&game.music);
+	CloseAudioDevice();
 	CloseWindow();
 	return 0;
 }

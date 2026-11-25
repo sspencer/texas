@@ -479,6 +479,15 @@ static void test_cli_args_and_viewport_scaling(void) {
 	EXPECT(!help);
 	EXPECT(err != NULL && strcmp(err, "--bogus") == 0);
 
+	// Mute flags enable muted launch option
+	const char *mute_flags[3] = {"-m", "--mute", "--no-music"};
+	for (int i = 0; i < 3; i++) {
+		parse_cli_args(1, &mute_flags[i], &opts, &help, &err);
+		EXPECT(opts.muted);
+		EXPECT(!help);
+		EXPECT(err == NULL);
+	}
+
 	// Viewport scaling: exact native window -> scale 1, offset 0
 	float s1 = 0, ox1 = 0, oy1 = 0;
 	compute_viewport((float)BASE_WIDTH, (float)BASE_HEIGHT, &s1, &ox1, &oy1);
@@ -621,6 +630,357 @@ static void test_generative_backdrop_game_lifecycle(void) {
 	EXPECT_EQ_DOUBLE(g.backdrop.time, t_playing);
 }
 
+static void test_music_song_step_alignment_and_synthesis(void) {
+	Music_Engine m;
+	music_init(&m);
+
+	int16_t buf[MUSIC_BUFFER_FRAMES * MUSIC_CHANNELS];
+
+	for (int song = SONG_TITLE; song < SONG_COUNT; song++) {
+		Music_Song s = (Music_Song)song;
+		EXPECT(music_validate_song_lengths(s));
+		EXPECT(music_song_total_steps(s) > 0);
+
+		music_play_song(&m, s);
+		EXPECT_EQ_INT(m.song, s);
+		EXPECT(!m.finished);
+
+		double sum_sq = 0.0;
+		double sum_dc = 0.0;
+		int peak = 0;
+		int total_samples = 0;
+
+		// Render ~2.5 seconds of stereo audio
+		int sample_chunks = (int)((2.5 * MUSIC_SAMPLE_RATE) / MUSIC_BUFFER_FRAMES) + 1;
+		for (int chunk = 0; chunk < sample_chunks; chunk++) {
+			music_render(&m, buf, MUSIC_BUFFER_FRAMES);
+			for (int i = 0; i < MUSIC_BUFFER_FRAMES * MUSIC_CHANNELS; i++) {
+				int v = buf[i];
+				int av = (v < 0) ? -v : v;
+				if (av > peak) peak = av;
+				sum_sq += (double)v * (double)v;
+				sum_dc += (double)v;
+				total_samples++;
+			}
+		}
+
+		double rms = sqrt(sum_sq / (double)total_samples);
+		double dc = fabs(sum_dc / (double)total_samples);
+		EXPECT(rms > 800.0);     // Audible, healthy signal level
+		EXPECT(peak > 3000);     // Dynamic peaks present
+		EXPECT(peak <= 32700);   // Soft-limited, never hard clips
+		EXPECT(dc < 400.0);      // Properly DC-blocked
+	}
+
+	// Verify looping wraps seamlessly on SONG_TITLE (~15.2s -> render up to 20s)
+	music_play_song(&m, SONG_TITLE);
+	bool saw_wrap = false;
+	int prev_step = m.current_step;
+	int wrap_chunks = (20 * MUSIC_SAMPLE_RATE) / MUSIC_BUFFER_FRAMES + 1;
+	for (int chunk = 0; chunk < wrap_chunks; chunk++) {
+		music_render(&m, buf, MUSIC_BUFFER_FRAMES);
+		if (m.current_step < prev_step) {
+			saw_wrap = true;
+			break;
+		}
+		prev_step = m.current_step;
+	}
+	EXPECT(saw_wrap);
+	EXPECT(!m.finished);
+
+	// Verify one-shot SONG_GAME_OVER finishes (~3.6s -> render 5.5s) and settles to silence
+	music_play_song(&m, SONG_GAME_OVER);
+	int go_chunks = (int)((5.5 * MUSIC_SAMPLE_RATE) / MUSIC_BUFFER_FRAMES) + 1;
+	for (int chunk = 0; chunk < go_chunks; chunk++) {
+		music_render(&m, buf, MUSIC_BUFFER_FRAMES);
+	}
+	EXPECT(m.finished);
+	music_render(&m, buf, MUSIC_BUFFER_FRAMES);
+	int tail_peak = 0;
+	for (int i = 0; i < MUSIC_BUFFER_FRAMES * MUSIC_CHANNELS; i++) {
+		int av = (buf[i] < 0) ? -buf[i] : buf[i];
+		if (av > tail_peak) tail_peak = av;
+	}
+	EXPECT(tail_peak < 16);
+}
+
+static void test_music_controls_pause_mute_and_danger_tempo(void) {
+	Music_Engine m;
+	music_init(&m);
+	int16_t buf[MUSIC_BUFFER_FRAMES * MUSIC_CHANNELS];
+
+	// Start Sugar Plum and advance briefly
+	music_play_song(&m, SONG_SUGAR_PLUM);
+	music_render(&m, buf, MUSIC_BUFFER_FRAMES);
+
+	// Pause should fade to silence and freeze sequencer step
+	music_set_paused(&m, true);
+	music_render(&m, buf, MUSIC_BUFFER_FRAMES); // 15ms fade completes within chunk
+	int paused_step = m.current_step;
+	// Let DC-blocker tail settle over ~100ms, then verify exact silence & frozen step
+	for (int c = 0; c < 5; c++) {
+		music_render(&m, buf, MUSIC_BUFFER_FRAMES);
+	}
+	EXPECT_EQ_INT(m.current_step, paused_step);
+	int paused_peak = 0;
+	for (int i = 0; i < MUSIC_BUFFER_FRAMES * MUSIC_CHANNELS; i++) {
+		int av = (buf[i] < 0) ? -buf[i] : buf[i];
+		if (av > paused_peak) paused_peak = av;
+	}
+	EXPECT(paused_peak < 4);
+
+	// Unpausing resumes advancing
+	music_set_paused(&m, false);
+	for (int c = 0; c < 12; c++) {
+		music_render(&m, buf, MUSIC_BUFFER_FRAMES);
+	}
+	EXPECT(m.current_step > paused_step);
+
+	// Muting fades output cleanly to exact silence
+	music_set_muted(&m, true);
+	music_render(&m, buf, MUSIC_BUFFER_FRAMES);
+	music_render(&m, buf, MUSIC_BUFFER_FRAMES);
+	int muted_peak = 0;
+	for (int i = 0; i < MUSIC_BUFFER_FRAMES * MUSIC_CHANNELS; i++) {
+		int av = (buf[i] < 0) ? -buf[i] : buf[i];
+		if (av > muted_peak) muted_peak = av;
+	}
+	EXPECT_EQ_INT(muted_peak, 0);
+	music_set_muted(&m, false);
+
+	// Danger mode accelerates tempo scale on gameplay tracks
+	music_play_song(&m, SONG_TETRA_MARCH);
+	EXPECT_EQ_FLOAT(m.target_tempo_scale, 1.0f);
+	music_set_danger(&m, true);
+	EXPECT(m.target_tempo_scale > 1.2f);
+	for (int c = 0; c < 40; c++) {
+		music_render(&m, buf, MUSIC_BUFFER_FRAMES);
+	}
+	EXPECT(m.tempo_scale > 1.2f);
+}
+
+static void test_music_game_lifecycle_and_title_selection(void) {
+	Game g;
+	init_game(&g);
+
+	EXPECT_EQ_INT(g.start_music, MUSIC_SEL_1);
+	EXPECT_EQ_INT(g.music.song, SONG_TITLE);
+	EXPECT(!g.music.muted);
+
+	// Clicking Music 3 on title screen previews Korobeiniki
+	Title_Layout layout = compute_title_layout();
+	bool hit = update_title_pointer(&g, rect_center(layout.music_rects[MUSIC_SEL_3]), true);
+	EXPECT(hit);
+	EXPECT_EQ_INT(g.start_music, MUSIC_SEL_3);
+	EXPECT_EQ_INT(g.title_focus, TITLE_FOCUS_MUSIC);
+	EXPECT_EQ_INT(g.music.song, SONG_KOROBEINIKI);
+
+	// Clicking OFF stops preview
+	hit = update_title_pointer(&g, rect_center(layout.music_rects[MUSIC_SEL_OFF]), true);
+	EXPECT(hit);
+	EXPECT_EQ_INT(g.start_music, MUSIC_SEL_OFF);
+	EXPECT_EQ_INT(g.music.song, SONG_NONE);
+
+	// Keyboard digit 2 selects Music 2 (Tetra March)
+	title_set_value(&g, 2);
+	EXPECT_EQ_INT(g.start_music, MUSIC_SEL_2);
+	EXPECT_EQ_INT(g.music.song, SONG_TETRA_MARCH);
+
+	// Starting game plays Tetra March
+	start_new_game(&g);
+	EXPECT_EQ_INT(g.music.song, SONG_TETRA_MARCH);
+	EXPECT(!g.music_danger);
+
+	// Stack reaching top 6 visible rows triggers danger tempo
+	g.board[HIDDEN_ROWS + 4][0] = 1;
+	update_game(&g, 0.016);
+	EXPECT(g.music_danger);
+	EXPECT(g.music.danger);
+
+	// Clearing stack exits danger tempo
+	clear_board(&g);
+	update_game(&g, 0.016);
+	EXPECT(!g.music_danger);
+	EXPECT(!g.music.danger);
+
+	// Cycling track during gameplay switches to Korobeiniki
+	cycle_music_selection(&g, 1);
+	EXPECT_EQ_INT(g.start_music, MUSIC_SEL_3);
+	EXPECT_EQ_INT(g.music.song, SONG_KOROBEINIKI);
+
+	// Mute toggle works cleanly
+	toggle_music_mute(&g);
+	EXPECT(g.music.muted);
+	toggle_music_mute(&g);
+	EXPECT(!g.music.muted);
+
+	// Pausing game pauses music
+	g.state = STATE_PAUSED;
+	update_game(&g, 0.016);
+	EXPECT(g.music.paused);
+	g.state = STATE_PLAYING;
+	update_game(&g, 0.016);
+	EXPECT(!g.music.paused);
+
+	// Game over triggers one-shot Game Over jingle
+	set_game_over(&g);
+	EXPECT_EQ_INT(g.music.song, SONG_GAME_OVER);
+
+	// Restart countdown silences music until new game starts
+	begin_restart_countdown(&g);
+	EXPECT_EQ_INT(g.music.song, SONG_NONE);
+
+	// Returning to title plays Title theme
+	return_to_title(&g);
+	EXPECT_EQ_INT(g.music.song, SONG_TITLE);
+}
+
+static void test_sfx_synthesis_distinct_line_clear_and_tetris(void) {
+	Music_Engine m;
+	music_init(&m);
+	// Leave song as SONG_NONE (Music OFF): SFX must still synthesize cleanly
+	int16_t buf[MUSIC_BUFFER_FRAMES * MUSIC_CHANNELS];
+
+	double line_clear_energy = 0.0;
+	double tetris_energy = 0.0;
+	double tetris_late_energy = 0.0;
+	double line_clear_late_energy = 0.0;
+
+	for (int kind = SFX_MOVE; kind < SFX_COUNT; kind++) {
+		Music_Sfx sfx = (Music_Sfx)kind;
+		music_clear_sfx(&m);
+		music_play_sfx(&m, sfx);
+		EXPECT_EQ_INT(m.last_sfx, sfx);
+
+		int peak = 0;
+		double total_sq = 0.0;
+		double late_sq = 0.0;
+
+		// Render ~0.95 seconds (41 chunks * 1024 frames)
+		for (int chunk = 0; chunk < 41; chunk++) {
+			music_render(&m, buf, MUSIC_BUFFER_FRAMES);
+			for (int i = 0; i < MUSIC_BUFFER_FRAMES * MUSIC_CHANNELS; i++) {
+				int v = buf[i];
+				int av = (v < 0) ? -v : v;
+				if (av > peak) peak = av;
+				total_sq += (double)v * (double)v;
+				// Window between ~0.42s and ~0.68s (chunks 18..29)
+				if (chunk >= 18 && chunk <= 29) {
+					late_sq += (double)v * (double)v;
+				}
+			}
+		}
+
+		EXPECT(peak > 1200);   // Clearly audible
+		EXPECT(peak <= 32700); // Never hard clips
+
+		// After ~0.95s, voice has completed and settled to silence
+		music_render(&m, buf, MUSIC_BUFFER_FRAMES);
+		int tail_peak = 0;
+		for (int i = 0; i < MUSIC_BUFFER_FRAMES * MUSIC_CHANNELS; i++) {
+			int av = (buf[i] < 0) ? -buf[i] : buf[i];
+			if (av > tail_peak) tail_peak = av;
+		}
+		EXPECT(tail_peak < 16);
+
+		if (sfx == SFX_LINE_CLEAR) {
+			line_clear_energy = total_sq;
+			line_clear_late_energy = late_sq;
+		} else if (sfx == SFX_TETRIS) {
+			tetris_energy = total_sq;
+			tetris_late_energy = late_sq;
+		}
+	}
+
+	// 4-row Tetris fanfare must be noticeably longer/richer than 1-3 row clear
+	EXPECT(tetris_energy > line_clear_energy * 1.5);
+	EXPECT(tetris_late_energy > 1e9);
+	EXPECT(line_clear_late_energy < tetris_late_energy * 0.05);
+
+	// Muting must silence SFX cleanly
+	music_set_muted(&m, true);
+	music_render(&m, buf, MUSIC_BUFFER_FRAMES); // Let 15ms mute ramp finish
+	music_play_sfx(&m, SFX_TETRIS);
+	music_render(&m, buf, MUSIC_BUFFER_FRAMES);
+	for (int i = 0; i < MUSIC_BUFFER_FRAMES * MUSIC_CHANNELS; i++) {
+		EXPECT_EQ_INT(buf[i], 0);
+	}
+}
+
+static void test_sfx_gameplay_triggers(void) {
+	Game g = new_playing_game();
+	EXPECT_EQ_INT(g.music.last_sfx, SFX_MENU_START);
+
+	// Move left triggers SFX_MOVE
+	set_tetromino(&g.tetro, 3); // T-piece
+	g.tetro.y = HIDDEN_ROWS + 4;
+	uint32_t before = g.music.sfx_trigger_count;
+	EXPECT(move_tetro(&g, (Vec2i){-1, 0}));
+	EXPECT_EQ_INT(g.music.last_sfx, SFX_MOVE);
+	EXPECT_EQ_INT(g.music.sfx_trigger_count, before + 1);
+
+	// Rotation triggers SFX_ROTATE
+	EXPECT(rotate_with_kick(&g, true, NULL));
+	EXPECT_EQ_INT(g.music.last_sfx, SFX_ROTATE);
+
+	// Hold triggers SFX_HOLD
+	EXPECT(hold_piece(&g));
+	EXPECT_EQ_INT(g.music.last_sfx, SFX_HOLD);
+
+	// Gravity lock (no clear) triggers SFX_LOCK
+	set_tetromino(&g.tetro, 2); // O-piece
+	g.tetro.x = 0;
+	g.tetro.y = BOARD_HEIGHT - 2;
+	lock_current_piece(&g);
+	EXPECT_EQ_INT(g.music.last_sfx, SFX_LOCK);
+
+	// Hard drop (no clear) triggers SFX_HARD_DROP
+	clear_board(&g);
+	set_tetromino(&g.tetro, 2);
+	g.tetro.x = 4;
+	g.tetro.y = HIDDEN_ROWS;
+	hard_drop(&g);
+	EXPECT_EQ_INT(g.music.last_sfx, SFX_HARD_DROP);
+
+	// 1-row clear triggers SFX_LINE_CLEAR
+	clear_board(&g);
+	for (int x = 0; x < GAME_WIDTH; x++) {
+		if (x != 0 && x != 1) {
+			g.board[BOARD_HEIGHT - 1][x] = 5;
+		}
+	}
+	set_tetromino(&g.tetro, 2); // O-piece completes bottom 1 row (row above stays partial)
+	g.tetro.x = 0;
+	g.tetro.y = HIDDEN_ROWS;
+	hard_drop(&g);
+	EXPECT_EQ_INT(g.state, STATE_LINE_CLEAR);
+	EXPECT_EQ_INT(g.clear_row_count, 1);
+	EXPECT_EQ_INT(g.music.last_sfx, SFX_LINE_CLEAR);
+	update_game(&g, LINE_CLEAR_DURATION + 0.01);
+
+	// 4-row clear (Tetris!) triggers distinct SFX_TETRIS, plus SFX_LEVEL_UP on level increment
+	clear_board(&g);
+	g.total_lines = 8;
+	g.level = 0;
+	for (int y = BOARD_HEIGHT - 4; y < BOARD_HEIGHT; y++) {
+		for (int x = 1; x < GAME_WIDTH; x++) {
+			g.board[y][x] = 6;
+		}
+	}
+	set_tetromino(&g.tetro, 1); // I-piece
+	rotate_cw(&g.tetro);
+	g.tetro.x = -2;
+	g.tetro.y = HIDDEN_ROWS;
+	hard_drop(&g);
+	EXPECT_EQ_INT(g.state, STATE_LINE_CLEAR);
+	EXPECT_EQ_INT(g.clear_row_count, 4);
+	EXPECT_EQ_INT(g.music.last_sfx, SFX_TETRIS);
+
+	update_game(&g, LINE_CLEAR_DURATION + 0.01);
+	EXPECT_EQ_INT(g.level, 1);
+	EXPECT_EQ_INT(g.music.last_sfx, SFX_LEVEL_UP);
+}
+
 #define RUN_TEST(fn)                                                    \
 	do {                                                                \
 		current_test_failed = 0;                                        \
@@ -654,6 +1014,11 @@ int main(void) {
 	RUN_TEST(test_title_mouse_selection_and_start);
 	RUN_TEST(test_generative_backdrop_styles_and_bounds);
 	RUN_TEST(test_generative_backdrop_game_lifecycle);
+	RUN_TEST(test_music_song_step_alignment_and_synthesis);
+	RUN_TEST(test_music_controls_pause_mute_and_danger_tempo);
+	RUN_TEST(test_music_game_lifecycle_and_title_selection);
+	RUN_TEST(test_sfx_synthesis_distinct_line_clear_and_tetris);
+	RUN_TEST(test_sfx_gameplay_triggers);
 
 	printf("\nFinished %d tests (%d failed).\n", tests_run, tests_failed);
 	return (tests_failed == 0) ? 0 : 1;
