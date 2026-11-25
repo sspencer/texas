@@ -513,3 +513,93 @@ test_title_mouse_selection_and_start :: proc(t: ^testing.T) {
 	testing.expect_value(t, g.level, 7)
 	testing.expect_value(t, g.start_height, 4)
 }
+
+@(test)
+test_generative_backdrop_styles_and_bounds :: proc(t: ^testing.T) {
+	b: Backdrop
+
+	// Every style should initialize valid, muted palettes and stay bounded & finite over long updates
+	for style in Backdrop_Style {
+		init_backdrop_style(&b, style)
+		testing.expect(t, b.initialized)
+		testing.expect_value(t, b.style, style)
+		testing.expect_value(t, b.time, 0.0)
+
+		// Verify base gradient stays dark and muted so gameplay remains primary focus
+		corners := [4]rl.Color{
+			b.palette.bg_top_left,
+			b.palette.bg_top_right,
+			b.palette.bg_bottom_left,
+			b.palette.bg_bottom_right,
+		}
+		for c in corners {
+			testing.expect(t, c.r <= 90 && c.g <= 90 && c.b <= 95)
+			testing.expect_value(t, c.a, u8(255))
+		}
+
+		// Simulate 2 minutes of gentle ambient animation
+		for _ in 0 ..< 240 {
+			update_backdrop(&b, 0.5)
+		}
+		testing.expect(t, b.time > 119.0)
+
+		lo := f32(-BACKDROP_WRAP_MARGIN) - 0.001
+		hi := f32(1.0 + BACKDROP_WRAP_MARGIN) + 0.001
+		switch style {
+		case .Constellation:
+			testing.expect(t, b.node_count >= 28 && b.node_count <= BACKDROP_MAX_NODES)
+			for i in 0 ..< b.node_count {
+				n := b.nodes[i]
+				testing.expect(t, !math.is_nan(n.x) && !math.is_nan(n.y))
+				testing.expect(t, n.x >= lo && n.x <= hi)
+				testing.expect(t, n.y >= lo && n.y <= hi)
+			}
+		case .Flow_Waves:
+			testing.expect(t, b.wave_count >= 5 && b.wave_count <= BACKDROP_MAX_WAVES)
+		case .Geo_Drift:
+			testing.expect(t, b.shape_count >= 18 && b.shape_count <= BACKDROP_MAX_SHAPES)
+			for i in 0 ..< b.shape_count {
+				s := b.shapes[i]
+				testing.expect(t, !math.is_nan(s.x) && !math.is_nan(s.y) && !math.is_nan(s.angle))
+				testing.expect(t, s.x >= lo && s.x <= hi)
+				testing.expect(t, s.y >= lo && s.y <= hi)
+				testing.expect(t, s.angle >= 0 && s.angle < 360.0)
+			}
+		case .Orbital_Contours:
+			testing.expect(t, b.orbit_count >= 2 && b.orbit_count <= BACKDROP_MAX_ORBITS)
+		case .Truchet_Lattice:
+			for r in 0 ..< BACKDROP_LATTICE_ROWS {
+				for c in 0 ..< BACKDROP_LATTICE_COLS {
+					testing.expect(t, b.lattice_cells[r][c] < 4)
+				}
+			}
+		}
+	}
+}
+
+@(test)
+test_generative_backdrop_game_lifecycle :: proc(t: ^testing.T) {
+	g: Game
+	init_game(&g)
+	testing.expect(t, g.backdrop.initialized)
+
+	// Title screen gently animates the backdrop
+	update_game(&g, 0.25)
+	testing.expect(t, g.backdrop.time > 0.2)
+
+	// Starting a new game generates a different style from the previous backdrop and resets time
+	prev_style := g.backdrop.style
+	start_new_game(&g)
+	testing.expect(t, g.backdrop.initialized)
+	testing.expect(t, g.backdrop.style != prev_style)
+	testing.expect_value(t, g.backdrop.time, 0.0)
+
+	// Playing advances backdrop; pausing freezes it
+	update_game(&g, 0.5)
+	t_playing := g.backdrop.time
+	testing.expect(t, t_playing >= 0.5)
+
+	g.state = .Paused
+	update_game(&g, 1.0)
+	testing.expect_value(t, g.backdrop.time, t_playing)
+}

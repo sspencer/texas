@@ -117,6 +117,7 @@ Game :: struct {
 	horiz_hold_time:    f64,
 	horiz_repeat_accum: f64,
 	soft_drop_accum:    f64,
+	backdrop:           Backdrop,
 	debug:              bool,
 }
 
@@ -320,6 +321,7 @@ init_game :: proc(g: ^Game) {
 	g.combo = -1
 	g.back_to_back = false
 	clear_board(g)
+	init_backdrop(&g.backdrop, false)
 }
 
 return_to_title :: proc(g: ^Game) {
@@ -407,6 +409,7 @@ start_new_game :: proc(g: ^Game) {
 	g.back_to_back = false
 	clear_board(g)
 	fill_starting_height(g, g.start_height)
+	init_backdrop(&g.backdrop, true)
 
 	g.bag = Piece_Bag{}
 	bag_refill(&g.bag)
@@ -1083,6 +1086,10 @@ handle_input :: proc(g: ^Game, frame_dt: f64) {
 
 // Advances game timers, gravity, lock delay, line clear animation, and restart countdown.
 update_game :: proc(g: ^Game, frame_dt: f64) {
+	if g.state != .Paused {
+		update_backdrop(&g.backdrop, frame_dt)
+	}
+
 	if g.banner_timer > 0 {
 		g.banner_timer = math.max(0.0, g.banner_timer - frame_dt)
 	}
@@ -1218,7 +1225,8 @@ draw :: proc(g: ^Game) {
 	rl.BeginDrawing()
 	defer rl.EndDrawing()
 
-	rl.ClearBackground(BACKGROUND)
+	rl.ClearBackground(g.backdrop.palette.bg_top_left if g.backdrop.initialized else BACKGROUND)
+	draw_backdrop(&g.backdrop, f32(rl.GetScreenWidth()), f32(rl.GetScreenHeight()))
 
 	// Camera2D transforms run in framebuffer pixels: raylib's BeginMode2D drops the
 	// HiDPI screen-scale matrix, so size the viewport from the render (pixel) size.

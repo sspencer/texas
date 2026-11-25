@@ -40,6 +40,7 @@ make clean    # remove bin/
 - **Hold Piece**: Swap the active piece into the Hold slot once per lock.
 - **Lock Delay & Responsive Input**: Guideline lock delay with move-reset cap and smooth DAS/ARR auto-repeat.
 - **Scoring & Line Clear Polish**: Soft/hard drop scoring, Single/Double/Triple/Tetris, T-Spin (Full & Mini), Back-to-Back, Combo bonuses, session high score, line-clear flash animation, and animated Game Over / restart countdown curtain.
+- **Generative Art Backdrop**: Subtle, low-contrast procedural graphics (constellation meshes, flowing waves, drifting geometry, orbital contours, and Truchet lattices) in curated muted palettes that animate gently and pick a fresh pattern each game without distracting from gameplay.
 
 ## Controls
 
