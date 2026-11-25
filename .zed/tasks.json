@@ -4,7 +4,7 @@
 [
   {
     "label": "Run app",
-    "command": "odin run .",
+    "command": "make run",
     "allow_concurrent_runs": false,
     "reveal": "no_focus",
     "hide": "never",

@@ -1,23 +1,20 @@
 # Texas
 
-A clean-room Tetris implementation written in Odin and Raylib.
+A clean-room Tetris implementation written in C (C11) and Raylib.
 
 ## Running
 
-Install [Odin](https://odin-lang.org/) and run (launches fullscreen by default):
+Install a C11 compiler (`cc`/`clang`/`gcc`), `pkg-config`, and [Raylib](https://www.raylib.com/) (e.g. `brew install raylib pkg-config` on macOS), then build and run (launches fullscreen by default):
 
 ```sh
 make run
-# or directly:
-odin run .
 ```
 
 To launch in windowed (non-fullscreen) mode:
 
 ```sh
 make run-windowed
-# or directly:
-odin run . -- --windowed
+# or after building:
 ./bin/texas -w          # also accepts --windowed or --no-fullscreen
 ```
 
@@ -26,8 +23,8 @@ To build, check, or run the unit tests:
 ```sh
 make          # debug build -> bin/texas
 make release  # optimized build -> bin/texas
-make test     # run unit tests
-make check    # type-check and vet
+make test     # build and run unit tests
+make check    # strict C11 warning check (-Wall -Wextra -Wpedantic -Werror)
 make clean    # remove bin/
 ```
 
